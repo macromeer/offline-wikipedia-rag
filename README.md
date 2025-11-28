@@ -4,8 +4,11 @@
 
 This project combines specialized AI models with the complete English Wikipedia to give you an intelligent assistant that works entirely offline, requires no API keys, and respects your privacy.
 
+[![Tests](https://github.com/macromeer/offline-wikipedia-rag/actions/workflows/tests.yml/badge.svg)](https://github.com/macromeer/offline-wikipedia-rag/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![codecov](https://codecov.io/gh/macromeer/offline-wikipedia-rag/branch/main/graph/badge.svg)](https://codecov.io/gh/macromeer/offline-wikipedia-rag)
 
 ## ✨ Features
 
@@ -20,28 +23,30 @@ Unlike ChatGPT or other cloud AI services, this gives you:
 ### Core Features
 - 🔒 **100% Private** - Everything runs locally, no data leaves your computer
 - 🌍 **Complete Wikipedia** - Full English Wikipedia (6+ million articles, updated 2024)
-- 🤖 **Two-Stage AI Pipeline** - Research-backed specialized models for accuracy
+- 🤖 **Two-Stage AI Pipeline** - Specialized models for accurate article selection and synthesis
 - 💰 **Free Forever** - No API keys, no subscriptions, no limits
 - 📖 **Academic-Style Citations** - Inline citations [1][2][3] with clickable source URLs
 
 ### Smart Intelligence
 - 🎯 **Content-Based Article Selection** (85-88% accuracy)
+  - Retrieves 25+ candidate articles based on Kiwix search (matching query terms)
   - AI reads article abstracts before selecting (not just titles)
-  - Fetches 25+ candidates, intelligently filters to 3-6 best matches
+  - Intelligently filters to 3-6 best matches based on relevance
   - Automatically excludes lists, stubs, disambiguation pages
   - Direct lookup finds main articles (e.g., "Earthquake" not "List of earthquakes")
-  - Proper noun detection for biographical/political questions
+  - Proper noun extraction (people, places, organizations, events)
   
 - 🧠 **Adaptive Complexity Detection**
-  - Analyzes question structure to determine depth needed
-  - Simple questions: 3 articles with deep reading (20+ paragraphs each)
-  - Complex questions: 6 articles with balanced coverage (10+ paragraphs each)
+  - Analyzes question structure using complexity scoring
+  - Scores based on indicators: multi-part questions, comparisons, analytical depth
+  - Simple questions: 3 articles with deep reading (~20 paragraphs each)
+  - Complex questions: 6 articles with balanced coverage (~10 paragraphs each)
   - Multi-part questions automatically get more sources
   
-- 🔬 **Two-Stage AI Pipeline** (Research-Optimized)
+- 🔬 **Two-Stage AI Pipeline**
   - **Stage 1 - Selection**: Mistral-7B for fast, accurate classification
   - **Stage 2 - Synthesis**: Llama-3.1-8B for coherent answer generation
-  - Specialized models outperform single-model by 15-20%
+  - Specialized models for each task improve accuracy and consistency
   - 10-18 second total response time with recommended setup
   
 - 📝 **Research-Ready Output**
@@ -116,7 +121,7 @@ of the universe.
 # Clone and run automated setup
 git clone https://github.com/yourusername/offline-wikipedia-rag.git
 cd offline-wikipedia-rag
-./install.sh
+./scripts/install.sh
 ```
 
 The installer will:
@@ -140,7 +145,7 @@ The installer will:
 - **Budget**: 12GB RAM - Use smaller models (still works well!)
 - **High-end**: 32GB+ RAM - Use larger models (Qwen2.5-32B + Gemma2-27B)
 
-See [TWO_STAGE_AI_PIPELINE.md](TWO_STAGE_AI_PIPELINE.md) for detailed model recommendations.
+See [docs/TWO_STAGE_AI_PIPELINE.md](docs/TWO_STAGE_AI_PIPELINE.md) for detailed model recommendations.
 
 ### GPU Support (Optional)
 - **GPU acceleration** is automatically detected and used if available
@@ -172,13 +177,13 @@ conda activate wikipedia-rag
 
 ```bash
 # Automated download (~102GB, takes 2-8 hours)
-./setup_full_offline_wikipedia.sh
+./scripts/setup_full_offline_wikipedia.sh
 ```
 
 ### 3. Start Using
 
 ```bash
-./start_offline_rag.sh
+./scripts/start_offline_rag.sh
 python wikipedia_rag_kiwix.py
 ```
 
@@ -187,9 +192,10 @@ python wikipedia_rag_kiwix.py
 ## ⚡ Performance
 
 ### Response Speed
-- **With GPU**: Very fast (~20-50 tokens/sec) - instant responses
-- **CPU-only**: Still usable (~2-10 tokens/sec) - 5-15 second responses
+- **Total time**: 10-25 seconds for complete answers (search + selection + synthesis)
+- **Token generation**: ~50-60 tokens/sec with GPU, ~5-15 tokens/sec CPU-only
 - **Network**: Fully offline, zero network latency
+- Performance varies based on hardware, models used, and number of articles retrieved
 
 ### GPU Acceleration
 GPU support is **completely optional**:
@@ -241,6 +247,11 @@ Options:
 python wikipedia_rag_kiwix.py \
   --selection-model mistral:7b \
   --model llama3.1:8b
+
+# Alternative for better selection (if you have 32GB+ RAM)
+python wikipedia_rag_kiwix.py \
+  --selection-model qwen2.5:32b-instruct \
+  --model llama3.1:8b
 ```
 
 ## 🏗️ How It Works
@@ -276,16 +287,19 @@ graph LR
 
 ### Why Two Models?
 
-Research shows specialized models perform better than one model doing everything:
-- **Selection model** (Mistral-7B): Fast, accurate classification from abstracts
-- **Summarization model** (Llama-3.1-8B): Excellent world knowledge and synthesis
+Specialized models perform better than one model doing everything:
+- **Selection model** (default: Mistral-7B): Fast, accurate classification from article abstracts
+- **Summarization model** (default: Llama-3.1-8B): Excellent world knowledge and synthesis
 - **Result**: 85-88% selection accuracy + high-quality answers in 10-18 seconds
+- System auto-detects available models and selects best options
 
 ## 🛠️ Technology Stack
 
 - **AI Models**: 
-  - [Mistral-7B](https://mistral.ai/) - Fast article selection/classification
-  - [Llama-3.1-8B](https://ai.meta.com/llama/) - High-quality answer synthesis
+  - [Mistral-7B](https://mistral.ai/) - Fast, accurate article selection from abstracts
+  - [Llama-3.1-8B](https://ai.meta.com/llama/) - High-quality answer synthesis with citations
+  - Alternative selection models: Qwen2.5 (32B/14B/7B), Hermes-3-8B
+  - Alternative synthesis models: Gemma-2 (27B/9B), Llama-3.3-70B
 - **Wikipedia**: [Kiwix](https://www.kiwix.org/) - Offline Wikipedia server (ZIM format)
 - **Runtime**: [Ollama](https://ollama.ai/) - Local AI model runner
 - **Language**: Python 3.10+
@@ -294,12 +308,43 @@ Research shows specialized models perform better than one model doing everything
 
 ```
 offline-wikipedia-rag/
-├── wikipedia_rag_kiwix.py              # Main application
-├── install.sh                          # One-line installer
-├── start_offline_rag.sh                # Quick start
+├── wikipedia_rag_kiwix.py              # Main RAG application
 ├── environment.yml                     # Python environment
+├── requirements.txt                    # Python dependencies
+├── scripts/
+│   ├── install.sh                      # One-line installer
+│   ├── setup_full_offline_wikipedia.sh # Wikipedia downloader
+│   └── start_offline_rag.sh            # Quick start script
+├── tests/
+│   ├── test_system.py                  # System validation tests
+│   ├── test_token_speed.py             # Token generation benchmarks
+│   └── test_cpu_speed.py               # CPU performance tests
 └── docs/                               # Additional documentation
 ```
+
+## 🧪 Testing
+
+The project includes a comprehensive pytest test suite:
+
+```bash
+# Run all unit tests
+pytest tests/ -v
+
+# Run specific test file
+pytest tests/test_rag_functions.py -v
+
+# Run tests with coverage
+pytest tests/ --cov=. --cov-report=html
+
+# Run only unit tests (skip integration tests)
+pytest -m "not integration"
+```
+
+**Test Coverage:**
+- ✅ Search term extraction (proper nouns, content words, stopword filtering)
+- ✅ Complexity estimation (simple, multi-part, comparison questions)
+- ✅ Model detection (selection priority, reasoning model avoidance)
+- ✅ Integration tests for Kiwix/Ollama (marked separately)
 
 ## 🤝 Contributing
 
@@ -309,6 +354,7 @@ Contributions are welcome! Areas for improvement:
 - Docker container
 - Additional AI models
 - Performance optimizations
+- More test coverage
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
@@ -324,7 +370,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 **Problem: "Connection refused to Kiwix"**
 ```bash
 # Restart Kiwix server
-./start_offline_rag.sh
+./scripts/start_offline_rag.sh
 ```
 
 **Problem: "Ollama model not found"**
@@ -349,8 +395,8 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## 🙏 Acknowledgments
 
-- [Mistral AI](https://mistral.ai/) - For the excellent Mistral-7B model
-- [Meta AI](https://ai.meta.com/) - For the powerful Llama-3.1 model
+- [Mistral AI](https://mistral.ai/) - For the excellent Mistral-7B model (default selection model)
+- [Meta AI](https://ai.meta.com/) - For the powerful Llama-3.1-8B model (default synthesis model)
 - [Kiwix](https://www.kiwix.org/) - For offline Wikipedia technology
 - [Ollama](https://ollama.ai/) - For easy local AI model deployment
 - [Wikimedia Foundation](https://www.wikimedia.org/) - For Wikipedia

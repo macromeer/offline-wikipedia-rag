@@ -62,3 +62,7 @@ tmp/
 temp/
 *.tmp
 archive/
+
+# Development files
+.dev/
+*.pyc
