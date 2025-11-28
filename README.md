@@ -292,9 +292,9 @@ Research shows specialized models perform better than one model doing everything
    - Casts wide net to ensure relevant articles are included
 
 3. **AI-Powered Selection** ⭐ NEW
-   - DeepSeek evaluates all candidate article titles
+   - Mistral-7B evaluates candidate articles using abstracts
    - Intelligently selects most relevant ones
-   - Filters out irrelevant results (TV shows, sports, etc.)
+   - Filters out irrelevant results (lists, disambiguation pages, etc.)
    - Ensures high-quality, focused answers
 
 4. **Balanced Content Reading** ⭐ NEW
@@ -304,10 +304,10 @@ Research shows specialized models perform better than one model doing everything
    - Keeps total context manageable for fast processing
 
 5. **Synthesis & Generation**
-   - DeepSeek reads ALL selected articles
+   - Llama-3.1-8B reads ALL selected articles
    - Synthesizes information across sources
    - Identifies connections and relationships
-   - Generates comprehensive, coherent answer
+   - Generates comprehensive, coherent answer with inline citations
 
 6. **Clean Output**
    - Well-formatted paragraphs
@@ -316,7 +316,9 @@ Research shows specialized models perform better than one model doing everything
 
 ## 🛠️ Technology Stack
 
-- **AI Model**: [DeepSeek R1](https://github.com/deepseek-ai/DeepSeek-R1) - Open-source reasoning model
+- **AI Models**: 
+  - [Mistral-7B](https://mistral.ai/) - Fast article selection/classification
+  - [Llama-3.1-8B](https://ai.meta.com/llama/) - High-quality answer synthesis
 - **Wikipedia**: [Kiwix](https://www.kiwix.org/) - Offline Wikipedia server (ZIM format)
 - **Runtime**: [Ollama](https://ollama.ai/) - Local AI model runner
 - **Language**: Python 3.10+
@@ -346,8 +348,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 ## ⚠️ Known Limitations
 
 - **First download takes time**: Wikipedia is 102GB
-- **RAM usage**: DeepSeek R1 needs ~8GB RAM
-- **CPU-based**: GPU support not yet implemented (coming soon)
+- **RAM usage**: Two models need ~10-12GB RAM (or 16GB recommended)
+- **CPU-based**: Works great on CPU, GPU support optional
 - **English only**: Currently supports English Wikipedia only
 
 ## 🆘 Troubleshooting
@@ -360,15 +362,16 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 **Problem: "Ollama model not found"**
 ```bash
-# Pull the model
-ollama pull deepseek-r1:latest
+# Pull the recommended models
+ollama pull mistral:7b
+ollama pull llama3.1:8b
 ```
 
 **Problem: "Out of memory"**
 ```bash
-# Use a smaller model
-ollama pull deepseek-r1:8b
-python wikipedia_rag_kiwix.py --model deepseek-r1:8b
+# System will automatically fall back to smaller available models
+# Or manually specify a smaller model
+python wikipedia_rag_kiwix.py --model llama3.2:3b
 ```
 
 See [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for more solutions.
@@ -379,7 +382,8 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## 🙏 Acknowledgments
 
-- [DeepSeek AI](https://www.deepseek.com/) - For the amazing open-source model
+- [Mistral AI](https://mistral.ai/) - For the excellent Mistral-7B model
+- [Meta AI](https://ai.meta.com/) - For the powerful Llama-3.1 model
 - [Kiwix](https://www.kiwix.org/) - For offline Wikipedia technology
 - [Ollama](https://ollama.ai/) - For easy local AI model deployment
 - [Wikimedia Foundation](https://www.wikimedia.org/) - For Wikipedia
