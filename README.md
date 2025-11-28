@@ -9,26 +9,61 @@ This project combines DeepSeek R1 (a powerful open-source AI model) with the com
 
 ## ✨ Features
 
+### Core Features
 - 🔒 **100% Private** - Everything runs locally, no data leaves your computer
 - 🌍 **Complete Wikipedia** - Full English Wikipedia (6+ million articles)
 - 🤖 **DeepSeek R1** - State-of-the-art open-source AI model
-- 🧠 **Adaptive Intelligence** - Automatically retrieves 3-7 articles based on question complexity
 - 💰 **Free Forever** - No API keys, no subscriptions, no limits
-- ⚡ **Fast** - Local processing, no network latency
-- 📖 **Clean Answers** - Well-formatted, readable responses with sources
+- 📖 **Clean Answers** - Well-formatted, readable responses with proper source citations
+
+### Smart Intelligence
+- 🎯 **AI-Powered Article Selection** - Retrieves 3x more articles, then uses AI to select most relevant ones
+  - Filters out irrelevant results (TV shows, sports, unrelated topics)
+  - Intelligently evaluates article titles against your question
+  - Ensures high-quality, topic-focused answers
+- 🧠 **Adaptive Complexity** - Automatically retrieves 3-7 articles based on question complexity
+  - Simple questions: 3 articles with deep reading
+  - Complex multi-part questions: 7 articles with balanced coverage
+- ⚖️ **Balanced Reading** - Dynamically adjusts content depth for optimal speed
+  - 3 articles: 30 paragraphs each (comprehensive)
+  - 7 articles: 12 paragraphs each (broad coverage)
+  - Keeps context manageable regardless of article count
+- ⚡ **Fast Processing** - Smart content balancing means quick responses even with many articles
 
 ## 🎬 Demo
 
 ```
-❓ Your question: What is quantum computing?
+❓ Your question: How old is the universe and what is its future?
+
+🔍 Searching local Wikipedia...
+  🔎 Search terms: age universe future
+✓ Found 18 candidate article(s)
+  🤖 AI selecting 6 most relevant from 18 articles...
+  ✓ AI selected: Age of the universe, Physical cosmology, Big Bang, 
+     Future of an expanding universe, Heat death of the universe, Dark energy
+✓ Selected 6 relevant article(s)
+  📊 Reading ~15 paragraphs per article
+  📄 Fetching articles...
 
 📖 Answer:
-Quantum computing is a type of computation that harnesses quantum mechanical 
-phenomena such as superposition and entanglement to perform operations on data.
-Unlike classical computers that use bits (0 or 1), quantum computers use quantum 
-bits or "qubits" which can exist in multiple states simultaneously...
+The universe is approximately 13.8 billion years old, as determined by 
+measurements of the cosmic microwave background radiation and observations 
+of distant supernovae. This age is calculated from the Big Bang...
 
-📚 Sources: Quantum computing, Qubit, Quantum entanglement
+The future of the universe is predicted to be one of continued expansion. 
+Due to dark energy, the expansion is accelerating. Eventually, in trillions 
+of years, the universe will reach a state called "heat death"...
+
+Sources: [1], [2], [3], [4], [5]
+
+----------------------------------------------------------------------
+📚 Retrieved Articles:
+   [1] Age of the universe
+   [2] Physical cosmology
+   [3] Big Bang
+   [4] Future of an expanding universe
+   [5] Heat death of the universe
+   [6] Dark energy
 ```
 
 ## 🚀 Quick Start (One-Line Install)
@@ -151,18 +186,48 @@ Options:
 
 ```mermaid
 graph LR
-    A[Your Question] --> B[Search Wikipedia]
-    B --> C[Kiwix Server]
-    C --> D[Retrieve Articles]
-    D --> E[DeepSeek AI]
-    E --> F[Formatted Answer]
+    A[Your Question] --> B[Analyze Complexity]
+    B --> C[Search Wikipedia 3x]
+    C --> D[AI Filters Relevant]
+    D --> E[Balanced Reading]
+    E --> F[DeepSeek Synthesis]
+    F --> G[Answer + Citations]
 ```
 
-1. **Question** → You ask in natural language
-2. **Search** → System searches 6M+ Wikipedia articles locally
-3. **Retrieve** → Gets relevant content from Kiwix server
-4. **Generate** → DeepSeek creates answer using Wikipedia context
-5. **Display** → Clean, readable response with sources
+### Intelligent Pipeline
+
+1. **Complexity Analysis** 
+   - Analyzes your question structure
+   - Determines optimal article count (3-7)
+   - Detects comparisons, multi-part questions, historical queries
+
+2. **Smart Search** (3x Overfetch)
+   - Searches Wikipedia for 3x more articles than needed
+   - Example: Need 6 articles? Retrieve 18 candidates
+   - Casts wide net to ensure relevant articles are included
+
+3. **AI-Powered Selection** ⭐ NEW
+   - DeepSeek evaluates all candidate article titles
+   - Intelligently selects most relevant ones
+   - Filters out irrelevant results (TV shows, sports, etc.)
+   - Ensures high-quality, focused answers
+
+4. **Balanced Content Reading** ⭐ NEW
+   - Dynamically adjusts paragraphs per article
+   - 3 articles: 30 paragraphs each (deep dive)
+   - 7 articles: 12 paragraphs each (broad coverage)
+   - Keeps total context manageable for fast processing
+
+5. **Synthesis & Generation**
+   - DeepSeek reads ALL selected articles
+   - Synthesizes information across sources
+   - Identifies connections and relationships
+   - Generates comprehensive, coherent answer
+
+6. **Clean Output**
+   - Well-formatted paragraphs
+   - Proper source citations [1], [2], [3]
+   - List of retrieved articles with numbers
 
 ## 🛠️ Technology Stack
 
