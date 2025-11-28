@@ -152,9 +152,30 @@ class KiwixWikipediaRAG:
             print(f"⚠ Search error: {e}")
             return []
     
+    def fetch_article_abstract(self, url: str) -> str:
+        """Fetch just the first paragraph (abstract) of an article"""
+        try:
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            content = soup.find('div', {'id': 'mw-content-text'})
+            if not content:
+                content = soup.find('div', {'class': 'mw-parser-output'})
+            
+            if content:
+                # Get first meaningful paragraph
+                for p in content.find_all('p'):
+                    text = p.get_text(strip=True)
+                    if len(text) > 100:  # Skip short paragraphs
+                        return text[:500]  # First 500 chars
+            return ""
+        except:
+            return ""
+    
     def select_relevant_articles(self, question: str, search_results: List[Dict], target_count: int) -> List[Dict]:
         """
-        Use AI to select the most relevant articles from search results
+        Use AI to select most relevant articles based on their abstracts
         
         Args:
             question: User's question
@@ -167,56 +188,67 @@ class KiwixWikipediaRAG:
         if len(search_results) <= target_count:
             return search_results
         
-        # Build list of article titles
-        titles_list = "\n".join([f"{i+1}. {r['title']}" for i, r in enumerate(search_results)])
+        print(f"  📥 Fetching abstracts for {len(search_results)} candidates...")
         
-        # Ask AI to select most relevant
-        selection_prompt = f"""You are helping select the most relevant Wikipedia articles to answer a question.
+        # Fetch abstracts for all candidates
+        candidates = []
+        for result in search_results:
+            abstract = self.fetch_article_abstract(result['url'])
+            if abstract:
+                candidates.append({
+                    'title': result['title'],
+                    'url': result['url'],
+                    'abstract': abstract
+                })
+        
+        if not candidates:
+            return search_results[:target_count]
+        
+        # Build compact list for AI
+        articles_text = "\n\n".join([
+            f"{i+1}. **{c['title']}**\n{c['abstract'][:300]}..."
+            for i, c in enumerate(candidates)
+        ])
+        
+        # Ask AI to select based on abstracts
+        selection_prompt = f"""Select the {target_count} most relevant articles to answer this question.
 
 Question: {question}
 
-Available articles:
-{titles_list}
+Articles:
+{articles_text}
 
-Task: Select the {target_count} MOST relevant articles that would help answer this question.
-Return ONLY the numbers (e.g., "1, 5, 7, 12") - no explanations, just comma-separated numbers.
-
-Selected article numbers:"""
+Return ONLY numbers separated by commas (e.g., "1,3,5"). No explanations."""
         
         try:
-            print(f"  🤖 AI selecting {target_count} most relevant from {len(search_results)} articles...")
+            print(f"  🤖 AI evaluating abstracts...")
             response = ollama.chat(
                 model=self.model_name,
-                messages=[{
-                    'role': 'user',
-                    'content': selection_prompt
-                }]
+                messages=[{'role': 'user', 'content': selection_prompt}],
+                options={'num_predict': 50, 'temperature': 0.3}  # Fast, focused
             )
             
-            # Parse response to get article indices
+            # Parse numbers
             answer = response['message']['content'].strip()
-            # Extract numbers from response
             import re
             numbers = re.findall(r'\d+', answer)
-            selected_indices = [int(n) - 1 for n in numbers[:target_count]]  # Convert to 0-based
+            indices = [int(n) - 1 for n in numbers[:target_count]]
+            indices = [i for i in indices if 0 <= i < len(candidates)]
             
-            # Filter to valid indices
-            selected_indices = [i for i in selected_indices if 0 <= i < len(search_results)]
-            
-            # Return selected articles
-            selected = [search_results[i] for i in selected_indices]
-            
-            if selected:
+            if indices:
+                selected = [candidates[i] for i in indices]
                 print(f"  ✓ AI selected: {', '.join([s['title'] for s in selected])}")
                 return selected
-            else:
-                # Fallback to first N if parsing failed
-                print(f"  ⚠ AI selection failed, using first {target_count} results")
-                return search_results[:target_count]
                 
         except Exception as e:
-            print(f"  ⚠ AI selection error: {e}, using first {target_count} results")
-            return search_results[:target_count]
+            print(f"  ⚠ Selection error: {e}")
+        
+        # Fallback: filter obvious junk then take top N
+        filtered = [c for c in candidates if not any(
+            word in c['title'].lower() 
+            for word in ['list of', '(film)', '(tv', 'season', 'episode', 'album', 'band']
+        )]
+        return (filtered or candidates)[:target_count]
     
     def fetch_article(self, url: str, max_paragraphs: int = None) -> str:
         """
