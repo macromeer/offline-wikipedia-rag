@@ -4,15 +4,24 @@
 
 The system automatically adjusts how many Wikipedia articles to retrieve based on question complexity:
 
-- **Simple questions** (2 articles): "What is Python?", "Who is Einstein?"
-- **Moderate questions** (3 articles): "How does photosynthesis work?", "Explain quantum mechanics"
-- **Complex questions** (4 articles): "Compare socialism and capitalism", "What's the relationship between gravity and time?"
-- **Very complex questions** (5 articles): "How does quantum computing work and what is the difference between qubits and classical bits?"
+- **Simple questions** (3 articles): "What is Python?", "Who is Einstein?"
+- **Moderate questions** (4-5 articles): "How does photosynthesis work?", "Explain quantum mechanics"
+- **Complex questions** (6 articles): "Compare socialism and capitalism", "How old is the universe and what is its future?"
+- **Very complex questions** (7 articles): "Explain the history and evolution of democracy", "What caused the fall of the Roman Empire?"
+
+**Smart detection looks for:**
+- Multi-part questions ("and", "vs")
+- Comparisons ("compare", "difference", "versus")
+- Relationships ("impact", "affect", "cause")
+- Deep explanations ("how does", "why", "explain")
+- Historical context ("history", "evolution", "origin")
+- Future predictions ("future", "will", "prediction")
 
 This ensures:
-- ✅ Fast responses for simple questions
-- ✅ Comprehensive context for complex topics
-- ✅ Better answers by pulling from multiple related articles
+- ✅ Fast responses for simple questions (3 articles)
+- ✅ Comprehensive context for complex topics (up to 7 articles)
+- ✅ Better synthesis across multiple related articles
+- ✅ More thorough content per article (5000 chars vs 3000)
 - ✅ Automatic - no configuration needed
 
 ## Interactive Mode

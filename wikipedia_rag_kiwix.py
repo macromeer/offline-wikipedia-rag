@@ -177,7 +177,7 @@ class KiwixWikipediaRAG:
                 
                 # Filter out empty paragraphs and get text
                 texts = []
-                for p in paragraphs[:10]:  # First 10 paragraphs
+                for p in paragraphs[:20]:  # First 20 paragraphs (more content)
                     text = p.get_text(strip=True)
                     if len(text) > 50:  # Only meaningful paragraphs
                         texts.append(text)
@@ -188,7 +188,7 @@ class KiwixWikipediaRAG:
                 combined = re.sub(r'\[\d+\]', '', combined)  # Remove citation numbers
                 combined = re.sub(r'\s+', ' ', combined)  # Normalize whitespace
                 
-                return combined[:3000]  # Limit to 3000 chars
+                return combined[:5000]  # Limit to 5000 chars (more context)
             
             return ""
             
@@ -204,38 +204,54 @@ class KiwixWikipediaRAG:
             question: User's question
             
         Returns:
-            Number of articles to retrieve (1-5)
+            Number of articles to retrieve (3-7)
         """
         question_lower = question.lower()
         
         # Complex question indicators
         complexity_score = 0
         
-        # Multi-part questions
-        if ' and ' in question_lower or ' vs ' in question_lower or ' versus ' in question_lower:
+        # Multi-part questions (need multiple perspectives)
+        if ' and ' in question_lower:
+            complexity_score += 2
+        if ' vs ' in question_lower or ' versus ' in question_lower:
+            complexity_score += 3  # Comparisons need both sides
+        
+        # Comparison/relationship questions (need context from multiple articles)
+        if any(word in question_lower for word in ['compare', 'difference', 'versus', 'vs']):
+            complexity_score += 3
+        if any(word in question_lower for word in ['relationship', 'connect', 'relate', 'impact', 'affect', 'influence', 'cause']):
             complexity_score += 2
         
-        # Comparison/relationship questions
-        if any(word in question_lower for word in ['compare', 'difference', 'relationship', 'connect', 'relate', 'impact', 'affect', 'influence']):
+        # Deep/analytical questions (need comprehensive context)
+        if any(word in question_lower for word in ['how does', 'how do', 'why', 'explain']):
+            complexity_score += 2
+        if any(word in question_lower for word in ['history', 'evolution', 'development', 'origin']):
             complexity_score += 2
         
-        # Broad/conceptual questions
-        if any(word in question_lower for word in ['how does', 'how do', 'why', 'explain', 'history of', 'overview']):
+        # Broad conceptual questions
+        if any(word in question_lower for word in ['overview', 'summary', 'introduction', 'basics']):
             complexity_score += 1
+        
+        # Future/prediction questions (need current state + theories)
+        if any(word in question_lower for word in ['future', 'prediction', 'will', 'going to']):
+            complexity_score += 2
         
         # Long questions often need more context
-        if len(question.split()) > 10:
+        if len(question.split()) > 12:
             complexity_score += 1
         
-        # Map complexity to number of articles
-        if complexity_score >= 4:
-            return 5  # Very complex - retrieve 5 articles
+        # Map complexity to number of articles (increased range)
+        if complexity_score >= 6:
+            return 7  # Very complex - retrieve 7 articles
+        elif complexity_score >= 4:
+            return 6  # Complex - retrieve 6 articles
+        elif complexity_score >= 3:
+            return 5  # Moderate-complex - retrieve 5 articles
         elif complexity_score >= 2:
-            return 4  # Complex - retrieve 4 articles
-        elif complexity_score >= 1:
-            return 3  # Moderate - retrieve 3 articles
+            return 4  # Moderate - retrieve 4 articles
         else:
-            return 2  # Simple - retrieve 2 articles
+            return 3  # Simple - retrieve 3 articles (minimum)
     
     def query_with_rag(self, question: str, max_results: int = None) -> Dict:
         """
@@ -295,23 +311,26 @@ class KiwixWikipediaRAG:
         
         context = "\n\n".join(context_parts)
         
-        # Create prompt
-        prompt = f"""You are a knowledgeable assistant. Using the Wikipedia content below, provide a clear, well-structured answer.
+        # Create enhanced prompt
+        prompt = f"""You are an expert researcher with access to multiple Wikipedia articles. Your task is to synthesize information from ALL the provided articles to give a comprehensive, accurate answer.
 
-FORMAT YOUR RESPONSE LIKE THIS:
-- Use clear paragraphs (not bullet points unless listing items)
-- Write in a natural, conversational style
-- Include key facts and context
-- Be concise but complete
-- Do NOT include citations like [1] or footnotes
-- Do NOT repeat the question
+INSTRUCTIONS:
+1. Read and understand ALL the Wikipedia articles provided below
+2. Identify connections, patterns, and relationships across the articles
+3. Synthesize the information into a coherent, well-structured answer
+4. Include specific facts, dates, numbers, and key concepts from the articles
+5. If articles present different perspectives, acknowledge and explain them
+6. Write in clear, natural paragraphs (avoid bullet points unless listing items)
+7. Be thorough but avoid unnecessary repetition
+8. Do NOT include citations like [1] or footnotes
+9. Do NOT repeat the question in your answer
 
-Wikipedia Content:
+Wikipedia Articles:
 {context}
 
 Question: {question}
 
-Provide a clear, well-written answer:"""
+Synthesize the information above to provide a comprehensive, well-structured answer:"""
         
         print(f"🤖 Generating answer with {self.model_name}...")
         
