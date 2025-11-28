@@ -172,12 +172,12 @@ class KiwixWikipediaRAG:
                 content = soup.find('body')
             
             if content:
-                # Extract all paragraphs (not just direct children)
+                # Extract ALL paragraphs (full article content)
                 paragraphs = content.find_all('p')
                 
                 # Filter out empty paragraphs and get text
                 texts = []
-                for p in paragraphs[:20]:  # First 20 paragraphs (more content)
+                for p in paragraphs:  # Read entire article
                     text = p.get_text(strip=True)
                     if len(text) > 50:  # Only meaningful paragraphs
                         texts.append(text)
@@ -188,7 +188,8 @@ class KiwixWikipediaRAG:
                 combined = re.sub(r'\[\d+\]', '', combined)  # Remove citation numbers
                 combined = re.sub(r'\s+', ' ', combined)  # Normalize whitespace
                 
-                return combined[:5000]  # Limit to 5000 chars (more context)
+                # Return full article (no length limit for better quality)
+                return combined
             
             return ""
             
@@ -304,12 +305,15 @@ class KiwixWikipediaRAG:
                 'model': self.model_name
             }
         
-        # Build context
+        # Build context with article numbers for citation
         context_parts = []
-        for item in contents:
-            context_parts.append(f"**{item['title']}**:\n{item['content']}")
+        for idx, item in enumerate(contents, 1):
+            context_parts.append(f"[Article {idx}] **{item['title']}**:\n{item['content']}")
         
         context = "\n\n".join(context_parts)
+        
+        # Build source list for reference
+        source_list = "\n".join([f"[{idx}] {item['title']}" for idx, item in enumerate(contents, 1)])
         
         # Create enhanced prompt
         prompt = f"""You are an expert researcher with access to multiple Wikipedia articles. Your task is to synthesize information from ALL the provided articles to give a comprehensive, accurate answer.
@@ -322,15 +326,21 @@ INSTRUCTIONS:
 5. If articles present different perspectives, acknowledge and explain them
 6. Write in clear, natural paragraphs (avoid bullet points unless listing items)
 7. Be thorough but avoid unnecessary repetition
-8. Do NOT include citations like [1] or footnotes
-9. Do NOT repeat the question in your answer
+8. Do NOT repeat the question in your answer
+
+IMPORTANT - CITING SOURCES:
+After your answer, add a "Sources:" section listing which articles you used.
+Format: "Sources: [1], [2], [3]" (list the article numbers you referenced)
+
+Available Articles:
+{source_list}
 
 Wikipedia Articles:
 {context}
 
 Question: {question}
 
-Synthesize the information above to provide a comprehensive, well-structured answer:"""
+Provide a comprehensive answer followed by your sources:"""
         
         print(f"🤖 Generating answer with {self.model_name}...")
         
@@ -387,7 +397,9 @@ Synthesize the information above to provide a comprehensive, well-structured ans
                         print()
                 
                 print("\n" + "-"*70)
-                print("📚 Sources: " + ", ".join([s['title'] for s in result['sources']]))
+                print("📚 Retrieved Articles:")
+                for idx, s in enumerate(result['sources'], 1):
+                    print(f"   [{idx}] {s['title']}")
                 print("="*70)
                 
             except KeyboardInterrupt:
@@ -431,8 +443,10 @@ def main():
                 else:
                     print()
             
-            print("\n" + "="*70)
-            print(f"📚 Sources: {', '.join([s['title'] for s in result['sources']])}")
+            print("\n" + "-"*70)
+            print("📚 Retrieved Articles:")
+            for idx, s in enumerate(result['sources'], 1):
+                print(f"   [{idx}] {s['title']}")
             print("="*70 + "\n")
         else:
             # Interactive mode
