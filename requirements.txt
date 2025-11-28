@@ -1,0 +1,7 @@
+# Core dependencies for Kiwix-based offline RAG
+ollama
+beautifulsoup4
+requests
+
+# Optional for testing
+wikipedia

@@ -1,0 +1,39 @@
+# Example Wikipedia article titles for indexing
+# Use this with: python wikipedia_indexer.py --file sample_titles.txt
+
+# Programming and Computer Science
+Python (programming language)
+Machine learning
+Artificial intelligence
+Deep learning
+Neural network
+Computer science
+Algorithm
+Data structure
+
+# Science
+Physics
+Chemistry
+Biology
+Mathematics
+Astronomy
+Quantum mechanics
+
+# History
+World War II
+Renaissance
+Ancient Egypt
+Roman Empire
+
+# Geography
+Europe
+Asia
+Pacific Ocean
+Mount Everest
+
+# General Knowledge
+Climate change
+Solar system
+Evolution
+DNA
+Photosynthesis

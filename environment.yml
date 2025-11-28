@@ -1,0 +1,13 @@
+# Mamba/Conda environment for Offline Wikipedia RAG
+name: wikipedia-rag
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    - ollama
+    - beautifulsoup4
+    - requests
+    - wikipedia
