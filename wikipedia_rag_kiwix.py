@@ -252,10 +252,7 @@ class KiwixWikipediaRAG:
         """
         try:
             # Extract Wikipedia-style article titles
-            print(f"  🤖 Extracting Wikipedia article titles...")
             search_terms = self.extract_search_terms(query)
-            
-            print(f"  🔎 Searching for articles:")
             
             all_results = []
             seen_titles = set()
@@ -264,7 +261,6 @@ class KiwixWikipediaRAG:
             for term in search_terms:
                 if len(all_results) >= 100:  # Increased cap for better selection
                     break
-                print(f"    - '{term}'")
                 results = self._do_search(term, max_results)
                 for r in results:
                     # Case-insensitive duplicate detection
@@ -288,7 +284,6 @@ class KiwixWikipediaRAG:
                         if title_lower not in seen_titles:
                             all_results.insert(0, {'title': title, 'url': direct_url})  # Insert at beginning
                             seen_titles.add(title_lower)
-                            print(f"    + Direct: '{title}'")
                 except:
                     pass  # Article doesn't exist or failed to load
             
@@ -436,14 +431,12 @@ Output ONLY the article numbers, comma-separated (example: "3,7,12"):
             
             # Parse article numbers from response
             answer = response['message']['content'].strip()
-            print(f"  📋 Selection output: '{answer}'")
             
             # Handle empty response
             if not answer:
                 print(f"  ⚠ Selection model returned empty response, using fallback")
             else:
                 numbers = re.findall(r'\d+', answer)
-                print(f"  📋 Extracted numbers: {numbers}")
                 
                 # Map displayed numbers back to actual indices, removing duplicates
                 seen_indices = set()
@@ -460,7 +453,6 @@ Output ONLY the article numbers, comma-separated (example: "3,7,12"):
                 
                 if indices:
                     selected = [search_results[i] for i in indices]
-                    print(f"  ✓ AI selected {len(selected)} articles: {', '.join([s['title'] for s in selected])}")
                     
                     # Accept selection if we got at least 1 good article
                     # The AI might rightfully reject poor candidates (lists, etc.)
@@ -612,7 +604,6 @@ Output ONLY the article numbers, comma-separated (example: "3,7,12"):
         # Auto-detect complexity if not specified
         if max_results is None:
             max_results = self.estimate_question_complexity(question)
-            print(f"🧠 Question complexity: retrieving {max_results} article(s)")
         
         print(f"\n🔍 Searching local Wikipedia for: {question}")
         
@@ -630,25 +621,18 @@ Output ONLY the article numbers, comma-separated (example: "3,7,12"):
         print(f"✓ Found {len(search_results)} candidate article(s)")
         
         # Step 1.5: Fetch abstracts for better selection (first paragraph only)
-        print(f"  📄 Fetching article abstracts for selection...")
-        articles_with_content = 0
+        print(f"  📄 Fetching article abstracts for AI selection...")
         for i, result in enumerate(search_results):
             if i >= 30:  # Limit abstract fetching to first 30 for speed
                 break
             abstract = self.fetch_article_abstract(result['url'])
             result['abstract'] = abstract
-            
-            # Show articles with meaningful content
-            if abstract and len(abstract) > 50:
-                articles_with_content += 1
-                if articles_with_content <= 8:  # Show first 8 with content
-                    preview = abstract[:80] + "..." if len(abstract) > 80 else abstract
-                    print(f"    {i+1}. {result['title']}: {preview}")
         
         # Step 2: Use AI to select most relevant articles with context
         selected_results = self.select_relevant_articles(question, search_results, max_results)
         
-        print(f"✓ Selected {len(selected_results)} relevant article(s)")
+        selected_titles = [r['title'] for r in selected_results]
+        print(f"✓ AI selected {len(selected_results)} article(s): {', '.join(selected_titles)}")
         
         # Balance content depth with article count for consistent speed
         # Target: Keep total context under 40-50k chars for <15s response time
@@ -735,9 +719,11 @@ CRITICAL - INLINE CITATIONS:
 FORMAT:
 - Write your answer in natural, readable paragraphs with inline citations
 - Do NOT repeat the question in your answer
-- Do NOT add a separate "Sources:" section at the end (citations are inline)
+- Do NOT add a "Sources:", "References:", or "Bibliography:" section at the end
+- Citations are ONLY inline [1][2][3] within the text
+- End your answer after the final paragraph - no lists or summaries after
 
-Your synthesized answer with inline citations:"""
+Your synthesized answer with inline citations (stop after final paragraph):"""
         
         print(f"🤖 Generating synthesis with {self.model_name}...")
         
@@ -759,6 +745,14 @@ Your synthesized answer with inline citations:"""
             )
             
             answer = response['message']['content']
+            
+            # Remove redundant references/sources section at the end
+            # LLMs often add this despite instructions - we show sources separately
+            import re
+            # Match "References:", "Sources:", "Bibliography:" followed by citation list
+            pattern = r'\n\s*(References?|Sources?|Bibliography):?\s*\n\s*\[.*$'
+            answer = re.sub(pattern, '', answer, flags=re.DOTALL | re.IGNORECASE)
+            
         except Exception as e:
             print(f"  ⚠ Generation error: {e}")
             answer = "Error generating answer. Please try again."

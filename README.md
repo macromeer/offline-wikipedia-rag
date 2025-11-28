@@ -58,46 +58,55 @@ Unlike ChatGPT or other cloud AI services, this gives you:
 
 ## 🎬 Demo
 
-```
-❓ Your question: What is quantum mechanics?
+```bash
+$ python wikipedia_rag_kiwix.py --question "What are the goals of NASA?"
 
-🔍 Searching local Wikipedia for: What is quantum mechanics?
-  🤖 Extracting Wikipedia article titles...
-  🔎 Searching for articles:
-    - 'Quantum'
-    - 'Mechanic'
-    - 'Quantum mechanics'
-    + Direct: 'Quantum mechanics'
+✓ Connected to Kiwix server at http://localhost:8080
+✓ Selection model: mistral:7b
+✓ Summarization model: llama3.1:8b
+
+🔍 Searching local Wikipedia for: What are the goals of NASA?
   ✓ Retrieved 11 unique candidates
-  📄 Fetching article abstracts for selection...
-    1. Quantum mechanics: Quantum mechanics is a fundamental theory in physics...
-    2. Interpretations of quantum mechanics: An interpretation of quantum mechanics...
-    3. Quantum information science: Quantum information science is a field...
+✓ Found 11 candidate article(s)
+  📄 Fetching article abstracts for AI selection...
   🤖 Selecting with mistral:7b (using article abstracts)...
-  ✓ AI selected 3 articles: Quantum mechanics, Interpretations of quantum mechanics, 
-    Quantum information science
+✓ AI selected 3 article(s): Goals, NASA, Timeline of Solar System exploration
+  📊 Reading ~20 paragraphs per article (max 8k chars each)
+  📄 Fetching: Goals
+  📄 Fetching: NASA
+  📄 Fetching: Timeline of Solar System exploration
+🤖 Generating synthesis with llama3.1:8b...
+⏱️  Total time: 13.6s
+
+======================================================================
+❓ Question: What are the goals of NASA?
+======================================================================
 
 📖 Answer:
 
-Quantum mechanics is a fundamental theory in physics that describes the 
-behavior of nature at and below the scale of atoms [1]. It is the foundation 
-of all quantum physics, including quantum chemistry, quantum field theory, 
-quantum technology, and quantum information science [1][3].
+NASA's primary goals encompass a wide range of objectives, from advancing 
+space exploration to conducting aeronautics research. The agency was 
+established in 1958 [2] as an independent federal agency responsible for 
+the civil space program, aeronautics research, and space research.
 
-Classical physics describes many aspects of nature at an ordinary scale, but 
-is insufficient for describing them at atomic and subatomic scales [1]. The 
-Copenhagen interpretation suggests that quantum mechanics is intrinsically 
-indeterministic, with probabilities calculated using the Born rule [2].
+NASA's early goals focused on achieving human spaceflight, which began with 
+Project Mercury [2]. The Apollo Program, launched in response to President 
+Kennedy's goal of landing an American on the Moon by the end of the 1960s [3], 
+marked a significant achievement in space exploration.
 
-Quantum information science combines the principles of quantum mechanics with 
-information theory to study the processing, analysis, and transmission of 
-information [3]. Quantum computers have been developed in recent years, with 
-Google and IBM investing significantly in quantum computer hardware research [3].
+NASA's goals also extend beyond human spaceflight to exploring the Solar 
+System [3]. The agency has sent numerous robotic spacecraft to explore 
+various planets and celestial bodies, greatly expanding our understanding 
+of the universe.
 
 ----------------------------------------------------------------------
 📚 Source Articles (click to open):
-   [1] Quantum mechanics
-       http://localhost:8080/content/wikipedia_en_all_maxi_2024-01/A/Quantum_mechanics
+   [1] Goals
+       http://localhost:8080/wikipedia_en_all_maxi_2024-01/A/Goals
+   [2] NASA
+       http://localhost:8080/wikipedia_en_all_maxi_2024-01/A/NASA
+   [3] Timeline of Solar System exploration
+       http://localhost:8080/content/wikipedia_en_all_maxi_2024-01/A/Timeline_of_Solar_System_exploration
    [2] Interpretations of quantum mechanics
        http://localhost:8080/content/wikipedia_en_all_maxi_2024-01/A/Interpretations_of_quantum_mechanics
    [3] Quantum information science
