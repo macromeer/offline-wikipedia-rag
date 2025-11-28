@@ -273,12 +273,12 @@ class KiwixWikipediaRAG:
                         all_results.append(r)
                         seen_titles.add(title_lower)
             
-            # Strategy 2: Direct lookup for main article (singular form)
+            # Strategy 2: Direct lookup for main article (singular form)  
             # This helps find "Earthquake" even when lists come first alphabetically
             for term in search_terms[:3]:  # Try first 3 terms as direct lookups
                 if len(all_results) >= 100:
                     break
-                # Try exact match by requesting the article directly
+                # Try exact match by requesting the article directly  
                 direct_url = f"{self.kiwix_url}/wikipedia_en_all_maxi_2024-01/A/{term.replace(' ', '_')}"
                 try:
                     response = requests.head(direct_url, timeout=2, allow_redirects=True)
@@ -290,7 +290,7 @@ class KiwixWikipediaRAG:
                             seen_titles.add(title_lower)
                             print(f"    + Direct: '{title}'")
                 except:
-                    pass  # Article doesn't exist, that's OK
+                    pass  # Article doesn't exist or failed to load
             
             print(f"  ✓ Retrieved {len(all_results)} unique candidates")
             return all_results
@@ -675,9 +675,19 @@ Output ONLY the article numbers, comma-separated (example: "3,7,12"):
                 })
         
         if not contents:
+            # Check if question contains abbreviations/acronyms
+            words = question.replace('?', '').replace('.', '').replace(',', '').split()
+            abbreviations = [w.strip() for w in words if w.strip().isupper() and len(w.strip()) >= 2 and len(w.strip()) <= 5]
+            
+            if abbreviations:
+                abbrev_list = ', '.join(f"'{a}'" for a in abbreviations[:3])  # Show max 3
+                suggestion = f"Could not find article content. Your question contains abbreviation(s): {abbrev_list}.\n\nTip: Try spelling out the full term (e.g., 'What is an exchange-traded fund?' instead of 'What is an ETF?')"
+            else:
+                suggestion = "Could not retrieve article content. Try rephrasing your question or using different search terms."
+            
             return {
                 'question': question,
-                'answer': "Could not retrieve article content.",
+                'answer': suggestion,
                 'sources': [],
                 'model': self.model_name
             }
