@@ -1,5 +1,20 @@
 # 📚 Usage Examples
 
+## 🧠 Adaptive Intelligence
+
+The system automatically adjusts how many Wikipedia articles to retrieve based on question complexity:
+
+- **Simple questions** (2 articles): "What is Python?", "Who is Einstein?"
+- **Moderate questions** (3 articles): "How does photosynthesis work?", "Explain quantum mechanics"
+- **Complex questions** (4 articles): "Compare socialism and capitalism", "What's the relationship between gravity and time?"
+- **Very complex questions** (5 articles): "How does quantum computing work and what is the difference between qubits and classical bits?"
+
+This ensures:
+- ✅ Fast responses for simple questions
+- ✅ Comprehensive context for complex topics
+- ✅ Better answers by pulling from multiple related articles
+- ✅ Automatic - no configuration needed
+
 ## Interactive Mode
 
 The easiest way to use the system:

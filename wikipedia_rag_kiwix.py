@@ -145,17 +145,63 @@ class KiwixWikipediaRAG:
             print(f"⚠ Fetch error for {url}: {e}")
             return ""
     
-    def query_with_rag(self, question: str, max_results: int = 3) -> Dict:
+    def estimate_question_complexity(self, question: str) -> int:
+        """
+        Estimate question complexity to determine how many articles to retrieve
+        
+        Args:
+            question: User's question
+            
+        Returns:
+            Number of articles to retrieve (1-5)
+        """
+        question_lower = question.lower()
+        
+        # Complex question indicators
+        complexity_score = 0
+        
+        # Multi-part questions
+        if ' and ' in question_lower or ' vs ' in question_lower or ' versus ' in question_lower:
+            complexity_score += 2
+        
+        # Comparison/relationship questions
+        if any(word in question_lower for word in ['compare', 'difference', 'relationship', 'connect', 'relate', 'impact', 'affect', 'influence']):
+            complexity_score += 2
+        
+        # Broad/conceptual questions
+        if any(word in question_lower for word in ['how does', 'how do', 'why', 'explain', 'history of', 'overview']):
+            complexity_score += 1
+        
+        # Long questions often need more context
+        if len(question.split()) > 10:
+            complexity_score += 1
+        
+        # Map complexity to number of articles
+        if complexity_score >= 4:
+            return 5  # Very complex - retrieve 5 articles
+        elif complexity_score >= 2:
+            return 4  # Complex - retrieve 4 articles
+        elif complexity_score >= 1:
+            return 3  # Moderate - retrieve 3 articles
+        else:
+            return 2  # Simple - retrieve 2 articles
+    
+    def query_with_rag(self, question: str, max_results: int = None) -> Dict:
         """
         Answer question using RAG with local Wikipedia
         
         Args:
             question: User's question
-            max_results: Number of articles to retrieve
+            max_results: Number of articles to retrieve (auto-detected if None)
             
         Returns:
             Dictionary with answer and sources
         """
+        # Auto-detect complexity if not specified
+        if max_results is None:
+            max_results = self.estimate_question_complexity(question)
+            print(f"🧠 Question complexity: retrieving {max_results} article(s)")
+        
         print(f"\n🔍 Searching local Wikipedia for: {question}")
         
         # Search Kiwix

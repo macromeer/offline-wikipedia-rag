@@ -12,6 +12,7 @@ This project combines DeepSeek R1 (a powerful open-source AI model) with the com
 - 🔒 **100% Private** - Everything runs locally, no data leaves your computer
 - 🌍 **Complete Wikipedia** - Full English Wikipedia (6+ million articles)
 - 🤖 **DeepSeek R1** - State-of-the-art open-source AI model
+- 🧠 **Adaptive Intelligence** - Automatically retrieves 2-5 articles based on question complexity
 - 💰 **Free Forever** - No API keys, no subscriptions, no limits
 - ⚡ **Fast** - Local processing, no network latency
 - 📖 **Clean Answers** - Well-formatted, readable responses with sources
