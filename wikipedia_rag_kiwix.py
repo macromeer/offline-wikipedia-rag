@@ -51,6 +51,53 @@ class KiwixWikipediaRAG:
             raise Exception(f"Could not connect to Kiwix server at {self.kiwix_url}: {e}")
         
         print(f"✓ Initialized with model: {self.model_name}")
+    def extract_search_terms(self, question: str) -> str:
+        """
+        Extract key search terms from a natural language question
+        
+        Args:
+            question: User's natural language question
+            
+        Returns:
+            Optimized search query
+        """
+        # Remove question words and common phrases
+        stopwords = ['what', 'when', 'where', 'who', 'why', 'how', 'is', 'are', 'was', 'were', 
+                    'does', 'do', 'did', 'can', 'could', 'would', 'should', 'will', 'the', 'a', 'an',
+                    'and', 'or', 'but', 'its', 'it', 'in', 'on', 'at', 'to', 'for', 'of', 'with',
+                    'tell', 'me', 'explain', 'describe', 'about', 'be', 'have', 'has', 'had', 'old']
+        
+        # Important words to prioritize (keep them even if they might seem like stopwords)
+        important_terms = {
+            'age': 'age',
+            'old': 'age',
+            'future': 'future',
+            'past': 'history',
+            'origin': 'origin',
+            'beginning': 'origin',
+            'end': 'future',
+        }
+        
+        # Clean and split
+        words = question.lower().split()
+        
+        # Filter out stopwords and punctuation, apply mappings
+        keywords = []
+        for w in words:
+            # Remove punctuation
+            w_clean = w.strip('?.,!:;')
+            
+            # Check if it's an important term to map
+            if w_clean in important_terms:
+                keywords.append(important_terms[w_clean])
+            # Keep if not a stopword and length > 2
+            elif w_clean not in stopwords and len(w_clean) > 2:
+                keywords.append(w_clean)
+        
+        # Join remaining keywords (limit to 4 most important words)
+        search_query = ' '.join(keywords[:4])
+        
+        return search_query if search_query else question
     
     def search_kiwix(self, query: str, max_results: int = 3) -> List[Dict]:
         """
@@ -64,10 +111,14 @@ class KiwixWikipediaRAG:
             List of search results with titles and URLs
         """
         try:
+            # Extract key search terms for better results
+            search_query = self.extract_search_terms(query)
+            print(f"  🔎 Search terms: {search_query}")
+            
             # Kiwix search endpoint
             search_url = f"{self.kiwix_url}/search"
             params = {
-                'pattern': query,
+                'pattern': search_query,
                 'pageSize': max_results
             }
             
