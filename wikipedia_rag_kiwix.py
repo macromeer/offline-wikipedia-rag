@@ -220,10 +220,13 @@ class KiwixWikipediaRAG:
                 terms.append(noun)
         
         # Strategy 2: Use important single content words (capitalized for Wikipedia)
+        # Skip very short words and common pronouns
+        skip_words = {'them', 'this', 'that', 'these', 'those', 'some', 'many', 'much', 'more', 'most'}
         for word in content_words[:3]:
-            title = word.capitalize()
-            if title not in terms and title not in proper_nouns:
-                terms.append(title)
+            if word not in skip_words and len(word) > 4:  # At least 5 chars
+                title = word.capitalize()
+                if title not in terms and title not in proper_nouns:
+                    terms.append(title)
         
         # Strategy 3: Try consecutive word pairs from content words
         for i in range(min(2, len(content_words) - 1)):
@@ -363,7 +366,6 @@ class KiwixWikipediaRAG:
             return search_results
         
         # Build article list with abstracts for informed classification
-        # Only include articles with meaningful content (filter out empty stubs)
         articles_text = ""
         article_index_map = {}  # Map displayed number to actual index
         display_num = 1
@@ -372,12 +374,18 @@ class KiwixWikipediaRAG:
             title = result['title']
             abstract = result.get('abstract', '')
             
-            # Only include articles with meaningful abstracts (>50 chars)
-            if abstract and len(abstract) > 50:
+            # Include articles with abstracts, or at minimum show the title
+            # Lower threshold to 30 chars to catch more main articles
+            if abstract and len(abstract) > 30:
                 article_index_map[display_num] = i
                 # Truncate abstract to keep prompt manageable
                 abstract_preview = abstract[:200] + "..." if len(abstract) > 200 else abstract
                 articles_text += f"{display_num}. **{title}**\n   {abstract_preview}\n\n"
+                display_num += 1
+            elif not title.lower().startswith('list of') and not title.lower().startswith('lists of'):
+                # Include non-list articles even without abstracts (they might be main articles)
+                article_index_map[display_num] = i
+                articles_text += f"{display_num}. **{title}**\n   (Main article)\n\n"
                 display_num += 1
         
         if not articles_text:
@@ -397,16 +405,20 @@ Question: "{question}"
 Available articles with previews:
 {articles_text}
 
-Task: Select the {target_count} MOST RELEVANT articles that directly answer the question.
+Task: Select the {target_count} MOST RELEVANT articles that directly answer ALL PARTS of the question.
 
 Selection criteria:
-✓ Choose articles whose content DIRECTLY addresses the question topic
-✓ Prefer biographical articles for "who is" questions
-✓ Prefer main topic articles with encyclopedic information
+✓ For questions with multiple parts (e.g., "what causes X and can we predict X"): Select articles covering BOTH aspects
+✓ ALWAYS include the main encyclopedic article about the subject (e.g., "Earthquakes" for earthquake questions)
+✓ For "who is" questions: Select biographical articles about that person
+✓ For "what causes" questions: Select main articles explaining that phenomenon
+✓ For "can we predict" questions: Select articles about prediction of that specific thing (not general "prediction")
+✓ Balance between general/main articles and specialized subtopics
+✗ Avoid: Articles that only share a keyword but different topic (e.g., "prediction markets" is NOT about "earthquake prediction")
 ✗ Avoid: Lists, year-specific articles, episode lists, song lists, disambiguation pages
-✗ Avoid: Tangentially related topics (e.g., songs/shows about a person vs. the person themselves)
+✗ Avoid: Tangentially related topics (e.g., songs about a person vs. the person themselves)
 
-Important: Base decisions on content relevance, not just keyword matching in titles.
+Critical: Focus on the question's MAIN SUBJECT. Don't select articles just because they contain one keyword from the question.
 
 Output ONLY the article numbers, comma-separated (example: "3,7,12"):
 """
