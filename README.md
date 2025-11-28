@@ -50,10 +50,17 @@ The installer will:
 
 ## 📋 System Requirements
 
+### Minimum Requirements
 - **OS**: Linux (Ubuntu 20.04+, Debian 11+, Fedora 35+) or macOS
 - **Disk**: 120GB free space
-- **RAM**: 8GB minimum, 16GB recommended
-- **CPU**: Multi-core processor (for better AI performance)
+- **RAM**: 8GB minimum, 16GB recommended for better performance
+- **CPU**: Multi-core processor (x86_64 or ARM64)
+
+### GPU Support (Optional)
+- **GPU acceleration** is automatically detected and used if available
+- Works perfectly fine **without GPU** (CPU-only mode)
+- Supported: NVIDIA (CUDA), Apple Silicon (Metal), AMD (ROCm)
+- No manual GPU setup required - Ollama handles everything automatically
 
 ## 💻 Manual Installation
 
@@ -89,6 +96,22 @@ python wikipedia_rag_kiwix.py
 ```
 
 </details>
+
+## ⚡ Performance
+
+### Response Speed
+- **With GPU**: Very fast (~20-50 tokens/sec) - instant responses
+- **CPU-only**: Still usable (~2-10 tokens/sec) - 5-15 second responses
+- **Network**: Fully offline, zero network latency
+
+### GPU Acceleration
+GPU support is **completely optional**:
+- ✅ Ollama **automatically detects** and uses GPU if available (NVIDIA/AMD/Apple Silicon)
+- ✅ No CUDA/ROCm installation needed - Ollama includes everything
+- ✅ Works great on **CPU-only** systems - no GPU required
+- ✅ Seamlessly falls back to CPU if no GPU found
+
+**Bottom line**: Just install and run - GPU acceleration works automatically if you have one, runs fine without it.
 
 ## 🎯 Usage
 
