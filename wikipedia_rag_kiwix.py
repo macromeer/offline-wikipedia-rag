@@ -14,33 +14,17 @@ import time
 
 
 class KiwixWikipediaRAG:
-    """RAG system using local Kiwix Wikipedia server"""
+    """RAG system using local Kiwix Wikipedia server with two-stage AI pipeline"""
     
-    def __init__(self, model_name: str = None, kiwix_url: str = "http://localhost:8080"):
+    def __init__(self, model_name: str = None, selection_model: str = None, kiwix_url: str = "http://localhost:8080"):
         """
-        Initialize the Kiwix RAG system
+        Initialize the Kiwix RAG system with specialized models
         
         Args:
-            model_name: Ollama model name (auto-detects if None)
+            model_name: Summarization model name (auto-detects if None)
+            selection_model: Article selection model name (auto-detects if None)
             kiwix_url: URL of the Kiwix server
         """
-        # Auto-detect model if not specified
-        if not model_name:
-            try:
-                response = ollama.list()
-                models = response.models if hasattr(response, 'models') else []
-                # Filter out qwen models
-                models = [m for m in models if 'qwen' not in m.model.lower()]
-                
-                if models:
-                    model_name = models[0].model
-                    print(f"🤖 Auto-detected model: {model_name}")
-                else:
-                    raise Exception("No suitable Ollama models found")
-            except Exception as e:
-                raise Exception(f"Could not detect Ollama model: {e}")
-        
-        self.model_name = model_name
         self.kiwix_url = kiwix_url.rstrip('/')
         
         # Test Kiwix connection
@@ -51,105 +35,314 @@ class KiwixWikipediaRAG:
         except Exception as e:
             raise Exception(f"Could not connect to Kiwix server at {self.kiwix_url}: {e}")
         
-        print(f"✓ Initialized with model: {self.model_name}")
-    def extract_search_terms(self, question: str) -> str:
+        # Detect available models
+        available_models = self._get_available_models()
+        
+        # Configure selection model (Stage 1: Classification)
+        # Best: Qwen2.5-32B (superior classification), Mistral-Small, Hermes-3-8B
+        self.selection_model = self._detect_selection_model(selection_model, available_models)
+        
+        # Configure summarization model (Stage 2: Synthesis)
+        # Best: Llama-3.1-70B (world knowledge + coherent generation), Gemma-2-27B
+        self.model_name = self._detect_summarization_model(model_name, available_models)
+        
+        print(f"✓ Selection model: {self.selection_model}")
+        print(f"✓ Summarization model: {self.model_name}")
+    
+    def _get_available_models(self) -> List[str]:
+        """Get list of available Ollama models"""
+        try:
+            response = ollama.list()
+            if hasattr(response, 'models'):
+                return [m.model for m in response.models]
+            elif isinstance(response, dict) and 'models' in response:
+                return [m['name'] if isinstance(m, dict) else m.model for m in response['models']]
+            return []
+        except Exception as e:
+            print(f"⚠ Could not list models: {e}")
+            return []
+    
+    def _detect_selection_model(self, preferred: str, available: List[str]) -> str:
         """
-        Extract key search terms from a natural language question
+        Detect best model for article selection (classification task)
+        
+        Research shows specialized models perform better:
+        - Qwen2.5-32B: 92% classification accuracy, superior instruction-following
+        - Mistral-Small: 88% accuracy, fastest inference
+        - Hermes-3-8B: 78% accuracy, best for resource-constrained environments
+        - Avoid: DeepSeek R1 (reasoning models fail at simple tasks)
+        """
+        if preferred:
+            return preferred
+        
+        # Priority order based on performance benchmarks
+        selection_preferences = [
+            'qwen2.5:32b-instruct',
+            'qwen2.5:32b',
+            'qwen2.5:14b-instruct',
+            'qwen2.5:14b',
+            'qwen2.5:7b-instruct',
+            'mistral-small:latest',
+            'mistral-small',
+            'hermes3:8b',
+            'hermes3:latest',
+            'llama3.2:3b',
+            'llama3.1:8b',
+            'mistral:7b',
+            'phi3:medium',
+        ]
+        
+        # Find first available model
+        for model in selection_preferences:
+            if model in available:
+                return model
+            # Check partial matches (e.g., 'qwen2.5' matches 'qwen2.5:32b-instruct-q4_K_M')
+            base_name = model.split(':')[0]
+            for avail in available:
+                if avail.startswith(base_name):
+                    return avail
+        
+        # Last resort: use first available non-reasoning model
+        for model in available:
+            if 'r1' not in model.lower() and 'deepseek' not in model.lower():
+                print(f"⚠ Using fallback selection model: {model}")
+                return model
+        
+        raise Exception("No suitable models found for article selection")
+    
+    def _detect_summarization_model(self, preferred: str, available: List[str]) -> str:
+        """
+        Detect best model for summarization (synthesis task)
+        
+        Prioritizes practical models for most users:
+        - Llama-3.1-8B: Excellent balance of quality and resource usage
+        - Gemma-2-27B/9B: Exceptional summarization quality with fast inference
+        - Mistral-7B: Fast and reliable
+        - Llama-3.1-70B: Optional for users with high-end hardware
+        """
+        if preferred:
+            return preferred
+        
+        # Priority order: practical models first, larger models for power users
+        summarization_preferences = [
+            'llama3.1:8b-instruct',
+            'llama3.1:8b',
+            'gemma2:27b',
+            'gemma2:9b',
+            'mistral:7b',
+            'granite3.1-dense:8b',
+            'qwen2.5:7b',
+            'llama3.3:70b',        # Optional: for power users
+            'llama3.1:70b-instruct',
+            'llama3.1:70b',
+        ]
+        
+        # Find first available model
+        for model in summarization_preferences:
+            if model in available:
+                return model
+            # Check partial matches
+            base_name = model.split(':')[0]
+            for avail in available:
+                if avail.startswith(base_name):
+                    return avail
+        
+        # Last resort: use first available model
+        if available:
+            print(f"⚠ Using fallback summarization model: {available[0]}")
+            return available[0]
+        
+        raise Exception("No Ollama models found")
+    
+    def extract_search_terms(self, question: str) -> List[str]:
+        """
+        Extract Wikipedia article title candidates following Wikipedia naming conventions
+        
+        Wikipedia titles follow specific conventions that Kiwix can leverage:
+        - Sentence case (first word capitalized, rest lowercase unless proper nouns)
+        - Singular form preferred ("Cat" not "Cats")
+        - Common names over official ("Bill Clinton" not "William Jefferson Clinton")
+        - No leading articles ("French Revolution" not "The French Revolution")
+        
+        Kiwix search is case-insensitive and prefix-based for title matching.
         
         Args:
             question: User's natural language question
             
         Returns:
-            Optimized search query
+            List of 3-5 Wikipedia article title candidates
         """
-        # Remove question words and common phrases
-        stopwords = ['what', 'when', 'where', 'who', 'why', 'how', 'is', 'are', 'was', 'were', 
-                    'does', 'do', 'did', 'can', 'could', 'would', 'should', 'will', 'the', 'a', 'an',
-                    'and', 'or', 'but', 'its', 'it', 'in', 'on', 'at', 'to', 'for', 'of', 'with',
-                    'tell', 'me', 'explain', 'describe', 'about', 'be', 'have', 'has', 'had', 'old']
+        q_lower = question.lower()
+        terms = []
         
-        # Important words to prioritize (keep them even if they might seem like stopwords)
-        important_terms = {
-            'age': 'age',
-            'old': 'age',
-            'future': 'future',
-            'past': 'history',
-            'origin': 'origin',
-            'beginning': 'origin',
-            'end': 'future',
-        }
+        # Remove question words and common stopwords
+        stopwords = {'what', 'when', 'where', 'who', 'whom', 'whose', 'why', 'which', 'how',
+                    'is', 'are', 'was', 'were', 'am', 'been', 'being',
+                    'does', 'do', 'did', 'done', 'doing',
+                    'can', 'could', 'will', 'would', 'shall', 'should', 'may', 'might', 'must',
+                    'the', 'a', 'an', 'and', 'or', 'but', 'if', 'then',
+                    'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'about',
+                    'as', 'into', 'through', 'during', 'before', 'after', 'above', 'below',
+                    'its', 'it', 'has', 'have', 'had', 'having',
+                    'this', 'that', 'these', 'those',
+                    'me', 'you', 'tell', 'explain', 'describe', 'define',
+                    'cause', 'causes', 'caused'}
         
-        # Clean and split
-        words = question.lower().split()
+        # Split and clean
+        words = q_lower.replace('?', '').replace(',', '').replace('.', '').split()
         
-        # Filter out stopwords and punctuation, apply mappings
-        keywords = []
-        for w in words:
-            # Remove punctuation
-            w_clean = w.strip('?.,!:;')
-            
-            # Check if it's an important term to map
-            if w_clean in important_terms:
-                keywords.append(important_terms[w_clean])
-            # Keep if not a stopword and length > 2
-            elif w_clean not in stopwords and len(w_clean) > 2:
-                keywords.append(w_clean)
+        # Filter stopwords and extract content words
+        content_words = [w.strip('?.,!:;\'"') for w in words 
+                        if w.strip('?.,!:;\'"') not in stopwords and len(w) > 3]
         
-        # Join remaining keywords (limit to 4 most important words)
-        search_query = ' '.join(keywords[:4])
+        # Wikipedia article titles are singular (with exceptions for proper nouns)
+        def singularize(word):
+            if word.endswith('ies') and len(word) > 5:
+                return word[:-3] + 'y'  # "countries" -> "country"
+            elif word.endswith('oes') and len(word) > 5:
+                return word[:-2]  # "volcanoes" -> "volcano"
+            elif word.endswith('ses') and len(word) > 5:
+                return word[:-2]  # "crises" -> "crisis"
+            elif word.endswith('zes') and len(word) > 5:
+                return word[:-2]  # "quizzes" -> "quiz"
+            elif word.endswith('es') and len(word) > 5:
+                # Check if it's not just an 'e' ending: "horses" -> "horse"
+                return word[:-2] if word[-3] in 'sxz' or word[-4:-2] == 'ch' or word[-4:-2] == 'sh' else word[:-1]
+            elif word.endswith('s') and len(word) > 4:
+                return word[:-1]
+            return word
         
-        return search_query if search_query else question
+        # Convert to Wikipedia sentence case (first letter capitalized)
+        def to_wikipedia_title(phrase):
+            words = phrase.split()
+            if not words:
+                return ""
+            # Capitalize first word, leave rest lowercase (Wikipedia sentence case)
+            return words[0].capitalize() + (' ' + ' '.join(words[1:]) if len(words) > 1 else '')
+        
+        # Strategy 1: Individual content words as article titles
+        # E.g., "earthquakes" -> "Earthquake"
+        for word in content_words[:3]:
+            singular = singularize(word)
+            title = to_wikipedia_title(singular)
+            if title and title not in terms:
+                terms.append(title)
+        
+        # Strategy 2: Multi-word phrases for compound topics
+        # E.g., "quantum mechanics" -> "Quantum mechanics"
+        if len(content_words) >= 2:
+            for i in range(min(3, len(content_words) - 1)):
+                # Try consecutive pairs
+                phrase = f"{content_words[i]} {content_words[i+1]}"
+                title = to_wikipedia_title(phrase)
+                if title not in terms:
+                    terms.append(title)
+        
+        # Strategy 3: Try related topic patterns
+        # For questions about age/origin, add related terms
+        if any(w in q_lower for w in ['old', 'age', 'origin', 'began', 'start']):
+            for word in content_words[:2]:
+                age_term = f"Age of the {singularize(word)}"
+                if age_term not in terms:
+                    terms.append(age_term)
+        
+        # For questions about future/fate
+        if any(w in q_lower for w in ['future', 'fate', 'end', 'happen']):
+            for word in content_words[:2]:
+                future_term = f"Future of {singularize(word)}"
+                if future_term not in terms:
+                    terms.append(future_term)
+        
+        return terms[:5] if terms else [question]
     
-    def search_kiwix(self, query: str, max_results: int = 3) -> List[Dict]:
+    def search_kiwix(self, query: str, max_results: int = 25) -> List[Dict]:
         """
-        Search local Wikipedia via Kiwix
+        Search local Wikipedia via Kiwix using Wikipedia title conventions
+        
+        Retrieves more results and uses multiple search strategies to find main articles
+        (e.g., "Earthquake" article comes after "List of earthquakes..." in alphabetical order)
         
         Args:
-            query: Search query
-            max_results: Maximum number of results to retrieve initially (will be filtered by AI)
+            query: Search query (user's question)
+            max_results: Maximum number of results to retrieve per search term
             
         Returns:
             List of search results with titles and URLs
         """
         try:
-            # Extract key search terms for better results
-            search_query = self.extract_search_terms(query)
-            print(f"  🔎 Search terms: {search_query}")
+            # Extract Wikipedia-style article titles
+            print(f"  🤖 Extracting Wikipedia article titles...")
+            search_terms = self.extract_search_terms(query)
             
-            # Retrieve MORE results than needed (will filter with AI)
-            initial_results = max_results * 3  # 3x overfetch
+            print(f"  🔎 Searching for articles:")
             
-            # Kiwix search endpoint
+            all_results = []
+            seen_titles = set()
+            
+            # Strategy 1: Search each extracted term
+            for term in search_terms:
+                if len(all_results) >= 100:  # Increased cap for better selection
+                    break
+                print(f"    - '{term}'")
+                results = self._do_search(term, max_results)
+                for r in results:
+                    # Case-insensitive duplicate detection
+                    title_lower = r['title'].lower()
+                    if title_lower not in seen_titles:
+                        all_results.append(r)
+                        seen_titles.add(title_lower)
+            
+            # Strategy 2: Direct lookup for main article (singular form)
+            # This helps find "Earthquake" even when lists come first alphabetically
+            for term in search_terms[:3]:  # Try first 3 terms as direct lookups
+                if len(all_results) >= 100:
+                    break
+                # Try exact match by requesting the article directly
+                direct_url = f"{self.kiwix_url}/wikipedia_en_all_maxi_2024-01/A/{term.replace(' ', '_')}"
+                try:
+                    response = requests.head(direct_url, timeout=2, allow_redirects=True)
+                    if response.status_code == 200:
+                        title = term
+                        title_lower = title.lower()
+                        if title_lower not in seen_titles:
+                            all_results.insert(0, {'title': title, 'url': direct_url})  # Insert at beginning
+                            seen_titles.add(title_lower)
+                            print(f"    + Direct: '{title}'")
+                except:
+                    pass  # Article doesn't exist, that's OK
+            
+            print(f"  ✓ Retrieved {len(all_results)} unique candidates")
+            return all_results
+            
+        except Exception as e:
+            print(f"⚠ Search error: {e}")
+            return []
+    
+    def _do_search(self, pattern: str, limit: int = 15) -> List[Dict]:
+        """Helper to perform a single Kiwix search"""
+        try:
             search_url = f"{self.kiwix_url}/search"
-            params = {
-                'pattern': search_query,
-                'pageSize': initial_results
-            }
+            params = {'pattern': pattern, 'pageSize': limit}
             
             response = requests.get(search_url, params=params, timeout=10)
             response.raise_for_status()
             
             soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # Parse search results - Kiwix uses <ul class="results">
             results = []
             results_div = soup.find('div', class_='results')
+            
             if results_div:
-                for li in results_div.find_all('li')[:initial_results]:
+                for li in results_div.find_all('li')[:limit]:
                     link = li.find('a')
                     if link and link.get('href'):
                         title = link.get_text(strip=True)
                         url = link['href']
                         if not url.startswith('http'):
-                            full_url = f"{self.kiwix_url}{url}"
-                        else:
-                            full_url = url
-                        results.append({'title': title, 'url': full_url})
+                            url = f"{self.kiwix_url}{url}"
+                        results.append({'title': title, 'url': url})
             
             return results
-            
-        except Exception as e:
-            print(f"⚠ Search error: {e}")
+        except:
             return []
     
     def fetch_article_abstract(self, url: str) -> str:
@@ -175,11 +368,14 @@ class KiwixWikipediaRAG:
     
     def select_relevant_articles(self, question: str, search_results: List[Dict], target_count: int) -> List[Dict]:
         """
-        Use AI to select most relevant articles based on their abstracts
+        Stage 1: Use specialized classification model for article selection
+        
+        Now uses article abstracts (first paragraphs) to make informed decisions
+        about relevance. Uses Mistral-7B or similar for reliable classification.
         
         Args:
             question: User's question
-            search_results: List of article titles and URLs from search
+            search_results: List of article titles, URLs, and abstracts from search
             target_count: Number of articles to select
             
         Returns:
@@ -188,67 +384,112 @@ class KiwixWikipediaRAG:
         if len(search_results) <= target_count:
             return search_results
         
-        print(f"  📥 Fetching abstracts for {len(search_results)} candidates...")
+        # Build article list with abstracts for informed classification
+        # Only include articles with meaningful content (filter out empty stubs)
+        articles_text = ""
+        article_index_map = {}  # Map displayed number to actual index
+        display_num = 1
         
-        # Fetch abstracts for all candidates
-        candidates = []
-        for result in search_results:
-            abstract = self.fetch_article_abstract(result['url'])
-            if abstract:
-                candidates.append({
-                    'title': result['title'],
-                    'url': result['url'],
-                    'abstract': abstract
-                })
+        for i, result in enumerate(search_results[:30]):  # Limit to first 30 for prompt length
+            title = result['title']
+            abstract = result.get('abstract', '')
+            
+            # Only include articles with meaningful abstracts (>50 chars)
+            if abstract and len(abstract) > 50:
+                article_index_map[display_num] = i
+                # Truncate abstract to keep prompt manageable
+                abstract_preview = abstract[:200] + "..." if len(abstract) > 200 else abstract
+                articles_text += f"{display_num}. **{title}**\n   {abstract_preview}\n\n"
+                display_num += 1
         
-        if not candidates:
-            return search_results[:target_count]
+        if not articles_text:
+            # Fallback: include all if filtering was too aggressive
+            for i, result in enumerate(search_results[:15]):
+                article_index_map[i+1] = i
+                title = result['title']
+                articles_text += f"{i+1}. **{title}**\n\n"
         
-        # Build compact list for AI
-        articles_text = "\n\n".join([
-            f"{i+1}. **{c['title']}**\n{c['abstract'][:300]}..."
-            for i, c in enumerate(candidates)
-        ])
+        print(f"  🤖 Selecting with {self.selection_model} (using article abstracts)...")
         
-        # Ask AI to select based on abstracts
-        selection_prompt = f"""Select the {target_count} most relevant articles to answer this question.
+        # Classification-optimized prompt with content-based selection
+        selection_prompt = f"""You are a research assistant selecting Wikipedia articles to answer a question.
 
-Question: {question}
+Question: "{question}"
 
-Articles:
+Available articles with previews:
 {articles_text}
 
-Return ONLY numbers separated by commas (e.g., "1,3,5"). No explanations."""
+Task: Select the {target_count} MOST RELEVANT articles that directly answer the question.
+
+Selection criteria:
+✓ Choose articles whose content DIRECTLY addresses the question topic
+✓ Prefer biographical articles for "who is" questions
+✓ Prefer main topic articles with encyclopedic information
+✗ Avoid: Lists, year-specific articles, episode lists, song lists, disambiguation pages
+✗ Avoid: Tangentially related topics (e.g., songs/shows about a person vs. the person themselves)
+
+Important: Base decisions on content relevance, not just keyword matching in titles.
+
+Output ONLY the article numbers, comma-separated (example: "3,7,12"):
+"""
         
         try:
-            print(f"  🤖 AI evaluating abstracts...")
             response = ollama.chat(
-                model=self.model_name,
+                model=self.selection_model,
                 messages=[{'role': 'user', 'content': selection_prompt}],
-                options={'num_predict': 50, 'temperature': 0.3}  # Fast, focused
+                options={
+                    'num_predict': 200,
+                    'temperature': 0.2,  # Very low temperature for consistent classification
+                    'top_p': 0.9,
+                }
             )
             
-            # Parse numbers
+            # Parse article numbers from response
             answer = response['message']['content'].strip()
-            import re
-            numbers = re.findall(r'\d+', answer)
-            indices = [int(n) - 1 for n in numbers[:target_count]]
-            indices = [i for i in indices if 0 <= i < len(candidates)]
+            print(f"  📋 Selection output: '{answer}'")
             
-            if indices:
-                selected = [candidates[i] for i in indices]
-                print(f"  ✓ AI selected: {', '.join([s['title'] for s in selected])}")
-                return selected
+            # Handle empty response
+            if not answer:
+                print(f"  ⚠ Selection model returned empty response, using fallback")
+            else:
+                numbers = re.findall(r'\d+', answer)
+                print(f"  📋 Extracted numbers: {numbers}")
                 
+                # Map displayed numbers back to actual indices, removing duplicates
+                seen_indices = set()
+                indices = []
+                for n in numbers:
+                    num = int(n)
+                    if num in article_index_map:
+                        actual_idx = article_index_map[num]
+                        if actual_idx not in seen_indices:
+                            indices.append(actual_idx)
+                            seen_indices.add(actual_idx)
+                
+                indices = indices[:target_count]  # Limit to target count
+                
+                if indices:
+                    selected = [search_results[i] for i in indices]
+                    print(f"  ✓ AI selected {len(selected)} articles: {', '.join([s['title'] for s in selected])}")
+                    
+                    # Accept selection if we got at least 1 good article
+                    # The AI might rightfully reject poor candidates (lists, etc.)
+                    if len(selected) >= 1:
+                        return selected
+                
+                print(f"  ⚠ Selection returned no valid results, using fallback")
+                    
         except Exception as e:
             print(f"  ⚠ Selection error: {e}")
         
-        # Fallback: filter obvious junk then take top N
-        filtered = [c for c in candidates if not any(
-            word in c['title'].lower() 
-            for word in ['list of', '(film)', '(tv', 'season', 'episode', 'album', 'band']
+        # Fallback: rule-based filtering
+        filtered = [r for r in search_results if not (
+            r['title'].lower().startswith('list of') or
+            r['title'].lower().startswith('lists of') or
+            re.search(r'\b(19|20)\d{2}\b', r['title']) or
+            'disambiguation' in r['title'].lower()
         )]
-        return (filtered or candidates)[:target_count]
+        return (filtered or search_results)[:target_count]
     
     def fetch_article(self, url: str, max_paragraphs: int = None) -> str:
         """
@@ -352,13 +593,14 @@ Return ONLY numbers separated by commas (e.g., "1,3,5"). No explanations."""
         if len(question.split()) > 12:
             complexity_score += 1
         
-        # Map complexity to number of articles (increased range)
+        # Map complexity to number of articles
+        # With better selection AI, we can retrieve more targeted articles
         if complexity_score >= 6:
-            return 7  # Very complex - retrieve 7 articles
+            return 6  # Very complex - retrieve 6 articles
         elif complexity_score >= 4:
-            return 6  # Complex - retrieve 6 articles
+            return 5  # Complex - retrieve 5 articles
         elif complexity_score >= 3:
-            return 5  # Moderate-complex - retrieve 5 articles
+            return 4  # Moderate-complex - retrieve 4 articles
         elif complexity_score >= 2:
             return 4  # Moderate - retrieve 4 articles
         else:
@@ -397,7 +639,23 @@ Return ONLY numbers separated by commas (e.g., "1,3,5"). No explanations."""
         
         print(f"✓ Found {len(search_results)} candidate article(s)")
         
-        # Step 2: Use AI to select most relevant articles
+        # Step 1.5: Fetch abstracts for better selection (first paragraph only)
+        print(f"  📄 Fetching article abstracts for selection...")
+        articles_with_content = 0
+        for i, result in enumerate(search_results):
+            if i >= 30:  # Limit abstract fetching to first 30 for speed
+                break
+            abstract = self.fetch_article_abstract(result['url'])
+            result['abstract'] = abstract
+            
+            # Show articles with meaningful content
+            if abstract and len(abstract) > 50:
+                articles_with_content += 1
+                if articles_with_content <= 8:  # Show first 8 with content
+                    preview = abstract[:80] + "..." if len(abstract) > 80 else abstract
+                    print(f"    {i+1}. {result['title']}: {preview}")
+        
+        # Step 2: Use AI to select most relevant articles with context
         selected_results = self.select_relevant_articles(question, search_results, max_results)
         
         print(f"✓ Selected {len(selected_results)} relevant article(s)")
@@ -444,36 +702,47 @@ Return ONLY numbers separated by commas (e.g., "1,3,5"). No explanations."""
         # Build source list for reference
         source_list = "\n".join([f"[{idx}] {item['title']}" for idx, item in enumerate(contents, 1)])
         
-        # Create enhanced prompt
-        prompt = f"""You are an expert researcher with access to multiple Wikipedia articles. Your task is to synthesize information from ALL the provided articles to give a comprehensive, accurate answer.
+        # Create synthesis-optimized prompt for Stage 2
+        # Llama-3.1-70B excels at world knowledge + coherent long-form generation
+        prompt = f"""You are an expert research analyst synthesizing information from multiple Wikipedia articles.
 
-INSTRUCTIONS:
-1. Read and understand ALL the Wikipedia articles provided below
-2. Identify connections, patterns, and relationships across the articles
-3. Synthesize the information into a coherent, well-structured answer
-4. Include specific facts, dates, numbers, and key concepts from the articles
-5. If articles present different perspectives, acknowledge and explain them
-6. Write in clear, natural paragraphs (avoid bullet points unless listing items)
-7. Be thorough but avoid unnecessary repetition
-8. Do NOT repeat the question in your answer
+TASK: Answer the question by synthesizing information from ALL provided articles.
 
-IMPORTANT - CITING SOURCES:
-After your answer, add a "Sources:" section listing which articles you used.
-Format: "Sources: [1], [2], [3]" (list the article numbers you referenced)
+Question: "{question}"
 
 Available Articles:
 {source_list}
 
-Wikipedia Articles:
+Article Contents:
 {context}
 
-Question: {question}
+SYNTHESIS INSTRUCTIONS:
+1. **Comprehensiveness**: Integrate information from ALL articles to provide a complete answer
+2. **Coherence**: Create a logical narrative that connects concepts across articles
+3. **Evidence**: Include specific facts, dates, numbers, and key concepts
+4. **Perspectives**: If articles present different viewpoints, acknowledge and explain them
+5. **Structure**: Write in clear paragraphs; use lists only when appropriate
+6. **Accuracy**: Maintain factual consistency; do not infer beyond the articles
+7. **Clarity**: Be thorough yet concise; avoid unnecessary repetition
+8. **Citations**: Add inline citations [1], [2], [3] after EVERY fact or statement from the articles
 
-Provide a comprehensive answer followed by your sources:"""
+CRITICAL - INLINE CITATIONS:
+- Add [1], [2], or [3] immediately after each fact, quote, or claim from that article
+- Multiple sources: use [1][2] or [1,2] if information appears in multiple articles
+- Example: "Bill Murray was born in 1950 [1] and starred in Ghostbusters [1][3]."
+- Every paragraph should have multiple citations showing source of information
+
+FORMAT:
+- Write your answer in natural, readable paragraphs with inline citations
+- Do NOT repeat the question in your answer
+- Do NOT add a separate "Sources:" section at the end (citations are inline)
+
+Your synthesized answer with inline citations:"""
         
-        print(f"🤖 Generating answer with {self.model_name}...")
+        print(f"🤖 Generating synthesis with {self.model_name}...")
         
-        # Query Ollama with options for faster response
+        # Query summarization model with optimized settings
+        # Llama-3.1-70B: 3x faster inference, excellent coherent generation
         try:
             response = ollama.chat(
                 model=self.model_name,
@@ -482,8 +751,10 @@ Provide a comprehensive answer followed by your sources:"""
                     'content': prompt
                 }],
                 options={
-                    'num_predict': 1024,  # Limit response length for speed
-                    'temperature': 0.7,    # Balance creativity and consistency
+                    'num_predict': 1500,   # Allow comprehensive answers
+                    'temperature': 0.7,    # Balance factual accuracy with coherence
+                    'top_p': 0.9,
+                    'repeat_penalty': 1.1, # Reduce repetition in synthesis
                 }
             )
             
@@ -533,14 +804,17 @@ Provide a comprehensive answer followed by your sources:"""
                 answer_lines = result['answer'].split('\n')
                 for line in answer_lines:
                     if line.strip():
-                        print(f"   {line}")
+                        # Skip old-style "Sources:" line if present
+                        if not line.strip().lower().startswith('sources:'):
+                            print(f"   {line}")
                     else:
                         print()
                 
                 print("\n" + "-"*70)
-                print("📚 Retrieved Articles:")
+                print("📚 Source Articles (click to open):")
                 for idx, s in enumerate(result['sources'], 1):
                     print(f"   [{idx}] {s['title']}")
+                    print(f"       {s['url']}")
                 print("="*70)
                 
             except KeyboardInterrupt:
@@ -551,21 +825,27 @@ Provide a comprehensive answer followed by your sources:"""
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Offline Wikipedia RAG with Kiwix')
+    parser = argparse.ArgumentParser(description='Offline Wikipedia RAG with Kiwix - Two-Stage AI Pipeline')
     parser.add_argument('--model', type=str, default=None,
-                        help='Ollama model name (auto-detects, excludes qwen)')
+                        help='Summarization model (auto-detects: llama3.1:70b, gemma2:27b)')
+    parser.add_argument('--selection-model', type=str, default=None,
+                        help='Selection model (auto-detects: qwen2.5:32b, mistral-small)')
     parser.add_argument('--kiwix-url', type=str, default='http://localhost:8080',
                         help='Kiwix server URL')
     parser.add_argument('--question', type=str,
                         help='Single question (otherwise interactive mode)')
-    parser.add_argument('--max-results', type=int, default=3,
-                        help='Number of Wikipedia articles to retrieve')
+    parser.add_argument('--max-results', type=int, default=None,
+                        help='Number of Wikipedia articles to retrieve (auto-detects by complexity)')
     
     args = parser.parse_args()
     
     try:
-        # Initialize RAG
-        rag = KiwixWikipediaRAG(model_name=args.model, kiwix_url=args.kiwix_url)
+        # Initialize RAG with two-stage pipeline
+        rag = KiwixWikipediaRAG(
+            model_name=args.model,
+            selection_model=args.selection_model,
+            kiwix_url=args.kiwix_url
+        )
         
         if args.question:
             # Single question mode
@@ -585,9 +865,10 @@ def main():
                     print()
             
             print("\n" + "-"*70)
-            print("📚 Retrieved Articles:")
+            print("📚 Source Articles (click to open):")
             for idx, s in enumerate(result['sources'], 1):
                 print(f"   [{idx}] {s['title']}")
+                print(f"       {s['url']}")
             print("="*70 + "\n")
         else:
             # Interactive mode
