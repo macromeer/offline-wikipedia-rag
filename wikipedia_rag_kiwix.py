@@ -105,7 +105,7 @@ class KiwixWikipediaRAG:
         
         Args:
             query: Search query
-            max_results: Maximum number of results
+            max_results: Maximum number of results to retrieve initially (will be filtered by AI)
             
         Returns:
             List of search results with titles and URLs
@@ -115,11 +115,14 @@ class KiwixWikipediaRAG:
             search_query = self.extract_search_terms(query)
             print(f"  🔎 Search terms: {search_query}")
             
+            # Retrieve MORE results than needed (will filter with AI)
+            initial_results = max_results * 3  # 3x overfetch
+            
             # Kiwix search endpoint
             search_url = f"{self.kiwix_url}/search"
             params = {
                 'pattern': search_query,
-                'pageSize': max_results
+                'pageSize': initial_results
             }
             
             response = requests.get(search_url, params=params, timeout=10)
@@ -131,7 +134,7 @@ class KiwixWikipediaRAG:
             results = []
             results_div = soup.find('div', class_='results')
             if results_div:
-                for li in results_div.find_all('li')[:max_results]:
+                for li in results_div.find_all('li')[:initial_results]:
                     link = li.find('a')
                     if link and link.get('href'):
                         title = link.get_text(strip=True)
@@ -148,12 +151,79 @@ class KiwixWikipediaRAG:
             print(f"⚠ Search error: {e}")
             return []
     
-    def fetch_article(self, url: str) -> str:
+    def select_relevant_articles(self, question: str, search_results: List[Dict], target_count: int) -> List[Dict]:
+        """
+        Use AI to select the most relevant articles from search results
+        
+        Args:
+            question: User's question
+            search_results: List of article titles and URLs from search
+            target_count: Number of articles to select
+            
+        Returns:
+            Filtered list of most relevant articles
+        """
+        if len(search_results) <= target_count:
+            return search_results
+        
+        # Build list of article titles
+        titles_list = "\n".join([f"{i+1}. {r['title']}" for i, r in enumerate(search_results)])
+        
+        # Ask AI to select most relevant
+        selection_prompt = f"""You are helping select the most relevant Wikipedia articles to answer a question.
+
+Question: {question}
+
+Available articles:
+{titles_list}
+
+Task: Select the {target_count} MOST relevant articles that would help answer this question.
+Return ONLY the numbers (e.g., "1, 5, 7, 12") - no explanations, just comma-separated numbers.
+
+Selected article numbers:"""
+        
+        try:
+            print(f"  🤖 AI selecting {target_count} most relevant from {len(search_results)} articles...")
+            response = ollama.chat(
+                model=self.model_name,
+                messages=[{
+                    'role': 'user',
+                    'content': selection_prompt
+                }]
+            )
+            
+            # Parse response to get article indices
+            answer = response['message']['content'].strip()
+            # Extract numbers from response
+            import re
+            numbers = re.findall(r'\d+', answer)
+            selected_indices = [int(n) - 1 for n in numbers[:target_count]]  # Convert to 0-based
+            
+            # Filter to valid indices
+            selected_indices = [i for i in selected_indices if 0 <= i < len(search_results)]
+            
+            # Return selected articles
+            selected = [search_results[i] for i in selected_indices]
+            
+            if selected:
+                print(f"  ✓ AI selected: {', '.join([s['title'] for s in selected])}")
+                return selected
+            else:
+                # Fallback to first N if parsing failed
+                print(f"  ⚠ AI selection failed, using first {target_count} results")
+                return search_results[:target_count]
+                
+        except Exception as e:
+            print(f"  ⚠ AI selection error: {e}, using first {target_count} results")
+            return search_results[:target_count]
+    
+    def fetch_article(self, url: str, max_paragraphs: int = None) -> str:
         """
         Fetch article content from Kiwix
         
         Args:
             url: Article URL
+            max_paragraphs: Maximum paragraphs to read (None = all)
             
         Returns:
             Article text content
@@ -172,12 +242,13 @@ class KiwixWikipediaRAG:
                 content = soup.find('body')
             
             if content:
-                # Extract ALL paragraphs (full article content)
+                # Extract paragraphs (balanced by article count)
                 paragraphs = content.find_all('p')
                 
                 # Filter out empty paragraphs and get text
                 texts = []
-                for p in paragraphs:  # Read entire article
+                para_limit = max_paragraphs if max_paragraphs else len(paragraphs)
+                for p in paragraphs[:para_limit]:
                     text = p.get_text(strip=True)
                     if len(text) > 50:  # Only meaningful paragraphs
                         texts.append(text)
@@ -188,7 +259,6 @@ class KiwixWikipediaRAG:
                 combined = re.sub(r'\[\d+\]', '', combined)  # Remove citation numbers
                 combined = re.sub(r'\s+', ' ', combined)  # Normalize whitespace
                 
-                # Return full article (no length limit for better quality)
                 return combined
             
             return ""
@@ -272,7 +342,7 @@ class KiwixWikipediaRAG:
         
         print(f"\n🔍 Searching local Wikipedia for: {question}")
         
-        # Search Kiwix
+        # Step 1: Search Kiwix (retrieves 3x more results)
         search_results = self.search_kiwix(question, max_results=max_results)
         
         if not search_results:
@@ -283,13 +353,30 @@ class KiwixWikipediaRAG:
                 'model': self.model_name
             }
         
-        print(f"✓ Found {len(search_results)} article(s)")
+        print(f"✓ Found {len(search_results)} candidate article(s)")
+        
+        # Step 2: Use AI to select most relevant articles
+        selected_results = self.select_relevant_articles(question, search_results, max_results)
+        
+        print(f"✓ Selected {len(selected_results)} relevant article(s)")
+        
+        # Balance content depth with article count
+        # More articles = less content per article (to keep total context reasonable)
+        paragraphs_per_article = {
+            3: 30,   # 3 articles: read ~30 paragraphs each
+            4: 25,   # 4 articles: read ~25 paragraphs each
+            5: 20,   # 5 articles: read ~20 paragraphs each
+            6: 15,   # 6 articles: read ~15 paragraphs each
+            7: 12,   # 7 articles: read ~12 paragraphs each
+        }
+        max_paragraphs = paragraphs_per_article.get(len(selected_results), 20)
+        print(f"  📊 Reading ~{max_paragraphs} paragraphs per article")
         
         # Fetch article contents
         contents = []
-        for result in search_results:
+        for result in selected_results:
             print(f"  📄 Fetching: {result['title']}")
-            content = self.fetch_article(result['url'])
+            content = self.fetch_article(result['url'], max_paragraphs=max_paragraphs)
             if content:
                 contents.append({
                     'title': result['title'],
