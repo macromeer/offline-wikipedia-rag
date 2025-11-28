@@ -107,10 +107,7 @@ of the universe.
        http://localhost:8080/wikipedia_en_all_maxi_2024-01/A/NASA
    [3] Timeline of Solar System exploration
        http://localhost:8080/content/wikipedia_en_all_maxi_2024-01/A/Timeline_of_Solar_System_exploration
-   [2] Interpretations of quantum mechanics
-       http://localhost:8080/content/wikipedia_en_all_maxi_2024-01/A/Interpretations_of_quantum_mechanics
-   [3] Quantum information science
-       http://localhost:8080/content/wikipedia_en_all_maxi_2024-01/A/Quantum_information_science
+======================================================================
 ```
 
 ## 🚀 Quick Start (One-Line Install)
@@ -283,36 +280,6 @@ Research shows specialized models perform better than one model doing everything
 - **Selection model** (Mistral-7B): Fast, accurate classification from abstracts
 - **Summarization model** (Llama-3.1-8B): Excellent world knowledge and synthesis
 - **Result**: 85-88% selection accuracy + high-quality answers in 10-18 seconds
-   - Determines optimal article count (3-7)
-   - Detects comparisons, multi-part questions, historical queries
-
-2. **Smart Search** (3x Overfetch)
-   - Searches Wikipedia for 3x more articles than needed
-   - Example: Need 6 articles? Retrieve 18 candidates
-   - Casts wide net to ensure relevant articles are included
-
-3. **AI-Powered Selection** ⭐ NEW
-   - Mistral-7B evaluates candidate articles using abstracts
-   - Intelligently selects most relevant ones
-   - Filters out irrelevant results (lists, disambiguation pages, etc.)
-   - Ensures high-quality, focused answers
-
-4. **Balanced Content Reading** ⭐ NEW
-   - Dynamically adjusts paragraphs per article
-   - 3 articles: 30 paragraphs each (deep dive)
-   - 7 articles: 12 paragraphs each (broad coverage)
-   - Keeps total context manageable for fast processing
-
-5. **Synthesis & Generation**
-   - Llama-3.1-8B reads ALL selected articles
-   - Synthesizes information across sources
-   - Identifies connections and relationships
-   - Generates comprehensive, coherent answer with inline citations
-
-6. **Clean Output**
-   - Well-formatted paragraphs
-   - Proper source citations [1], [2], [3]
-   - List of retrieved articles with numbers
 
 ## 🛠️ Technology Stack
 
