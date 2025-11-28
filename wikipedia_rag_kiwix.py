@@ -84,11 +84,11 @@ class KiwixWikipediaRAG:
             'qwen2.5:7b-instruct',
             'mistral-small:latest',
             'mistral-small',
+            'mistral:7b',           # Mistral-7B excellent for classification
             'hermes3:8b',
             'hermes3:latest',
             'llama3.2:3b',
-            'llama3.1:8b',
-            'mistral:7b',
+            'llama3.1:8b',          # Fallback: use for synthesis instead
             'phi3:medium',
         ]
         
@@ -186,72 +186,50 @@ class KiwixWikipediaRAG:
                     'its', 'it', 'has', 'have', 'had', 'having',
                     'this', 'that', 'these', 'those',
                     'me', 'you', 'tell', 'explain', 'describe', 'define',
-                    'cause', 'causes', 'caused'}
+                    'cause', 'causes', 'caused',
+                    # Add common verbs that shouldn't be search terms
+                    'become', 'became', 'get', 'got', 'make', 'made', 'take', 'took'}
         
-        # Split and clean
-        words = q_lower.replace('?', '').replace(',', '').replace('.', '').split()
+        # Extract proper nouns (capitalized words in original question)
+        words_original = question.replace('?', '').replace(',', '').replace('.', '').split()
+        proper_nouns = []
+        i = 0
+        while i < len(words_original):
+            word = words_original[i]
+            # Check if capitalized and not a stopword
+            if word and word[0].isupper() and word.lower() not in stopwords:
+                # Check for multi-word proper nouns (consecutive capitalized words)
+                phrase = [word]
+                j = i + 1
+                while j < len(words_original) and words_original[j] and words_original[j][0].isupper():
+                    phrase.append(words_original[j])
+                    j += 1
+                proper_nouns.append(' '.join(phrase))
+                i = j
+            else:
+                i += 1
         
-        # Filter stopwords and extract content words
-        content_words = [w.strip('?.,!:;\'"') for w in words 
+        # Extract content words (lowercase, filtered)
+        words_lower = q_lower.replace('?', '').replace(',', '').replace('.', '').split()
+        content_words = [w.strip('?.,!:;\'"') for w in words_lower 
                         if w.strip('?.,!:;\'"') not in stopwords and len(w) > 3]
         
-        # Wikipedia article titles are singular (with exceptions for proper nouns)
-        def singularize(word):
-            if word.endswith('ies') and len(word) > 5:
-                return word[:-3] + 'y'  # "countries" -> "country"
-            elif word.endswith('oes') and len(word) > 5:
-                return word[:-2]  # "volcanoes" -> "volcano"
-            elif word.endswith('ses') and len(word) > 5:
-                return word[:-2]  # "crises" -> "crisis"
-            elif word.endswith('zes') and len(word) > 5:
-                return word[:-2]  # "quizzes" -> "quiz"
-            elif word.endswith('es') and len(word) > 5:
-                # Check if it's not just an 'e' ending: "horses" -> "horse"
-                return word[:-2] if word[-3] in 'sxz' or word[-4:-2] == 'ch' or word[-4:-2] == 'sh' else word[:-1]
-            elif word.endswith('s') and len(word) > 4:
-                return word[:-1]
-            return word
+        # Strategy 1: Use proper nouns as-is (e.g., "Donald Trump")
+        for noun in proper_nouns[:3]:
+            if noun not in terms:
+                terms.append(noun)
         
-        # Convert to Wikipedia sentence case (first letter capitalized)
-        def to_wikipedia_title(phrase):
-            words = phrase.split()
-            if not words:
-                return ""
-            # Capitalize first word, leave rest lowercase (Wikipedia sentence case)
-            return words[0].capitalize() + (' ' + ' '.join(words[1:]) if len(words) > 1 else '')
-        
-        # Strategy 1: Individual content words as article titles
-        # E.g., "earthquakes" -> "Earthquake"
+        # Strategy 2: Use important single content words (capitalized for Wikipedia)
         for word in content_words[:3]:
-            singular = singularize(word)
-            title = to_wikipedia_title(singular)
-            if title and title not in terms:
+            title = word.capitalize()
+            if title not in terms and title not in proper_nouns:
                 terms.append(title)
         
-        # Strategy 2: Multi-word phrases for compound topics
-        # E.g., "quantum mechanics" -> "Quantum mechanics"
-        if len(content_words) >= 2:
-            for i in range(min(3, len(content_words) - 1)):
-                # Try consecutive pairs
-                phrase = f"{content_words[i]} {content_words[i+1]}"
-                title = to_wikipedia_title(phrase)
-                if title not in terms:
-                    terms.append(title)
-        
-        # Strategy 3: Try related topic patterns
-        # For questions about age/origin, add related terms
-        if any(w in q_lower for w in ['old', 'age', 'origin', 'began', 'start']):
-            for word in content_words[:2]:
-                age_term = f"Age of the {singularize(word)}"
-                if age_term not in terms:
-                    terms.append(age_term)
-        
-        # For questions about future/fate
-        if any(w in q_lower for w in ['future', 'fate', 'end', 'happen']):
-            for word in content_words[:2]:
-                future_term = f"Future of {singularize(word)}"
-                if future_term not in terms:
-                    terms.append(future_term)
+        # Strategy 3: Try consecutive word pairs from content words
+        for i in range(min(2, len(content_words) - 1)):
+            phrase = f"{content_words[i].capitalize()} {content_words[i+1]}"
+            if phrase not in terms:
+                terms.append(phrase)
         
         return terms[:5] if terms else [question]
     

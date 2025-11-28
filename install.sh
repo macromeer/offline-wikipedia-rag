@@ -18,11 +18,12 @@ echo -e "${BOLD}============================================${NC}"
 echo ""
 echo "This will install:"
 echo "  • Ollama AI runtime"
-echo "  • DeepSeek R1 model (~5GB)"
+echo "  • Mistral-7B model (~4.4GB) - article selection"
+echo "  • Llama-3.1-8B model (~4.9GB) - answer synthesis"
 echo "  • Full English Wikipedia (~102GB)"
 echo "  • Python environment"
 echo ""
-echo -e "${YELLOW}⚠️  Total download: ~110GB${NC}"
+echo -e "${YELLOW}⚠️  Total download: ~112GB${NC}"
 echo -e "${YELLOW}⚠️  Time needed: 2-8 hours${NC}"
 echo ""
 read -p "Continue? (y/N): " -n 1 -r
@@ -91,14 +92,26 @@ else
 fi
 sleep 3
 
-# Step 2: Pull DeepSeek model
+# Step 2: Pull AI models
 echo ""
-echo -e "${BLUE}🧠 Step 2/5: Downloading DeepSeek R1 model (~5GB)...${NC}"
-if ollama list | grep -q "deepseek-r1:latest"; then
-    echo -e "${GREEN}✓${NC} DeepSeek R1 already downloaded"
+echo -e "${BLUE}🧠 Step 2/5: Downloading AI models...${NC}"
+
+# Pull Mistral-7B for article selection
+if ollama list | grep -q "mistral:7b"; then
+    echo -e "${GREEN}✓${NC} Mistral-7B already downloaded"
 else
-    ollama pull deepseek-r1:latest
-    echo -e "${GREEN}✓${NC} DeepSeek R1 downloaded"
+    echo "Downloading Mistral-7B (~4.4GB)..."
+    ollama pull mistral:7b
+    echo -e "${GREEN}✓${NC} Mistral-7B downloaded"
+fi
+
+# Pull Llama-3.1-8B for synthesis
+if ollama list | grep -q "llama3.1:8b"; then
+    echo -e "${GREEN}✓${NC} Llama-3.1-8B already downloaded"
+else
+    echo "Downloading Llama-3.1-8B (~4.9GB)..."
+    ollama pull llama3.1:8b
+    echo -e "${GREEN}✓${NC} Llama-3.1-8B downloaded"
 fi
 
 # Step 3: Install Python environment
