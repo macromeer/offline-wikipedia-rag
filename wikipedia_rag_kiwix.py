@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 import argparse
 from typing import List, Dict
 import re
+import time
 
 
 class KiwixWikipediaRAG:
@@ -248,10 +249,17 @@ Selected article numbers:"""
                 # Filter out empty paragraphs and get text
                 texts = []
                 para_limit = max_paragraphs if max_paragraphs else len(paragraphs)
+                total_chars = 0
+                max_chars_per_article = 8000  # Hard limit per article
+                
                 for p in paragraphs[:para_limit]:
                     text = p.get_text(strip=True)
                     if len(text) > 50:  # Only meaningful paragraphs
+                        # Stop if we've gathered enough content
+                        if total_chars + len(text) > max_chars_per_article:
+                            break
                         texts.append(text)
+                        total_chars += len(text)
                 
                 combined = '\n\n'.join(texts)
                 
@@ -335,6 +343,8 @@ Selected article numbers:"""
         Returns:
             Dictionary with answer and sources
         """
+        start_time = time.time()
+        
         # Auto-detect complexity if not specified
         if max_results is None:
             max_results = self.estimate_question_complexity(question)
@@ -360,17 +370,17 @@ Selected article numbers:"""
         
         print(f"✓ Selected {len(selected_results)} relevant article(s)")
         
-        # Balance content depth with article count
-        # More articles = less content per article (to keep total context reasonable)
+        # Balance content depth with article count for consistent speed
+        # Target: Keep total context under 40-50k chars for <15s response time
         paragraphs_per_article = {
-            3: 30,   # 3 articles: read ~30 paragraphs each
-            4: 25,   # 4 articles: read ~25 paragraphs each
-            5: 20,   # 5 articles: read ~20 paragraphs each
-            6: 15,   # 6 articles: read ~15 paragraphs each
-            7: 12,   # 7 articles: read ~12 paragraphs each
+            3: 20,   # 3 articles: ~20 paragraphs each (~24k chars total)
+            4: 15,   # 4 articles: ~15 paragraphs each (~24k chars total)
+            5: 12,   # 5 articles: ~12 paragraphs each (~24k chars total)
+            6: 10,   # 6 articles: ~10 paragraphs each (~24k chars total)
+            7: 8,    # 7 articles: ~8 paragraphs each (~22k chars total)
         }
-        max_paragraphs = paragraphs_per_article.get(len(selected_results), 20)
-        print(f"  📊 Reading ~{max_paragraphs} paragraphs per article")
+        max_paragraphs = paragraphs_per_article.get(len(selected_results), 15)
+        print(f"  📊 Reading ~{max_paragraphs} paragraphs per article (max 8k chars each)")
         
         # Fetch article contents
         contents = []
@@ -431,22 +441,34 @@ Provide a comprehensive answer followed by your sources:"""
         
         print(f"🤖 Generating answer with {self.model_name}...")
         
-        # Query Ollama
-        response = ollama.chat(
-            model=self.model_name,
-            messages=[{
-                'role': 'user',
-                'content': prompt
-            }]
-        )
+        # Query Ollama with options for faster response
+        try:
+            response = ollama.chat(
+                model=self.model_name,
+                messages=[{
+                    'role': 'user',
+                    'content': prompt
+                }],
+                options={
+                    'num_predict': 1024,  # Limit response length for speed
+                    'temperature': 0.7,    # Balance creativity and consistency
+                }
+            )
+            
+            answer = response['message']['content']
+        except Exception as e:
+            print(f"  ⚠ Generation error: {e}")
+            answer = "Error generating answer. Please try again."
         
-        answer = response['message']['content']
+        elapsed_time = time.time() - start_time
+        print(f"⏱️  Total time: {elapsed_time:.1f}s")
         
         return {
             'question': question,
             'answer': answer,
             'sources': contents,
-            'model': self.model_name
+            'model': self.model_name,
+            'time': elapsed_time
         }
     
     def interactive_mode(self):
