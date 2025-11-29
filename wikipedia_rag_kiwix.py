@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Full Offline Wikipedia RAG using Kiwix Server
-Requires: Kiwix server running with Wikipedia ZIM file
+Automatically starts Kiwix server if not running
 """
 
 import ollama
@@ -11,12 +11,143 @@ import argparse
 from typing import List, Dict
 import re
 import time
+import subprocess
+import os
+import sys
+import signal
+import atexit
+from pathlib import Path
+
+
+# Global variable to track Kiwix process started by this script
+_kiwix_process = None
+
+
+def _find_kiwix_binary():
+    """Find kiwix-serve binary in common locations"""
+    locations = [
+        Path.home() / ".local/bin/kiwix-serve",
+        Path("/usr/local/bin/kiwix-serve"),
+        Path("/usr/bin/kiwix-serve"),
+    ]
+    
+    for location in locations:
+        if location.exists():
+            return str(location)
+    
+    # Try system PATH
+    try:
+        result = subprocess.run(["which", "kiwix-serve"], 
+                              capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except:
+        pass
+    
+    return None
+
+
+def _find_zim_files():
+    """Find Wikipedia ZIM files in common locations"""
+    search_paths = [
+        Path.home() / "wikipedia-offline",
+        Path.home() / "Downloads",
+        Path("/data/wikipedia"),
+        Path("/var/lib/kiwix"),
+    ]
+    
+    for path in search_paths:
+        if path.exists():
+            zim_files = list(path.glob("*.zim"))
+            if zim_files:
+                return zim_files
+    
+    return []
+
+
+def _is_kiwix_running(port=8080):
+    """Check if Kiwix server is already running"""
+    try:
+        response = requests.get(f"http://localhost:{port}/", timeout=2)
+        return response.status_code == 200
+    except:
+        return False
+
+
+def _start_kiwix_server(port=8080):
+    """Start Kiwix server if not already running"""
+    global _kiwix_process
+    
+    # Check if already running
+    if _is_kiwix_running(port):
+        print(f"✓ Kiwix server already running at http://localhost:{port}")
+        return True
+    
+    print("📚 Starting Kiwix server...")
+    
+    # Find binary
+    kiwix_bin = _find_kiwix_binary()
+    if not kiwix_bin:
+        print("❌ kiwix-serve not found. Install with:")
+        print("   wget https://download.kiwix.org/release/kiwix-tools/kiwix-tools_linux-x86_64.tar.gz")
+        print("   tar xzf kiwix-tools_linux-x86_64.tar.gz")
+        print("   mv kiwix-tools_*/kiwix-serve ~/.local/bin/")
+        return False
+    
+    # Find ZIM files
+    zim_files = _find_zim_files()
+    if not zim_files:
+        print("❌ No Wikipedia ZIM files found. Download with:")
+        print("   scripts/setup_full_offline_wikipedia.sh")
+        return False
+    
+    # Start server
+    try:
+        zim_paths = [str(f) for f in zim_files]
+        cmd = [kiwix_bin, "--port", str(port)] + zim_paths
+        
+        _kiwix_process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True
+        )
+        
+        # Wait for server to be ready
+        for i in range(10):
+            time.sleep(0.5)
+            if _is_kiwix_running(port):
+                print(f"✓ Kiwix server started at http://localhost:{port}")
+                return True
+        
+        print("⚠ Kiwix server started but not responding")
+        return False
+        
+    except Exception as e:
+        print(f"❌ Failed to start Kiwix server: {e}")
+        return False
+
+
+def _cleanup_kiwix():
+    """Stop Kiwix server if we started it"""
+    global _kiwix_process
+    if _kiwix_process:
+        try:
+            os.killpg(os.getpgid(_kiwix_process.pid), signal.SIGTERM)
+            _kiwix_process.wait(timeout=5)
+            print("\n✓ Stopped Kiwix server")
+        except:
+            pass
+
+
+# Register cleanup on exit
+atexit.register(_cleanup_kiwix)
 
 
 class KiwixWikipediaRAG:
     """RAG system using local Kiwix Wikipedia server with two-stage AI pipeline"""
     
-    def __init__(self, model_name: str = None, selection_model: str = None, kiwix_url: str = "http://localhost:8080"):
+    def __init__(self, model_name: str = None, selection_model: str = None, kiwix_url: str = "http://localhost:8080", auto_start: bool = True):
         """
         Initialize the Kiwix RAG system with specialized models
         
@@ -24,16 +155,22 @@ class KiwixWikipediaRAG:
             model_name: Summarization model name (auto-detects if None)
             selection_model: Article selection model name (auto-detects if None)
             kiwix_url: URL of the Kiwix server
+            auto_start: Automatically start Kiwix server if not running
         """
         self.kiwix_url = kiwix_url.rstrip('/')
         
-        # Test Kiwix connection
+        # Test Kiwix connection or auto-start
         try:
             response = requests.get(f"{self.kiwix_url}/", timeout=5)
             response.raise_for_status()
             print(f"✓ Connected to Kiwix server at {self.kiwix_url}")
         except Exception as e:
-            raise Exception(f"Could not connect to Kiwix server at {self.kiwix_url}: {e}")
+            if auto_start:
+                port = int(kiwix_url.split(":")[-1]) if ":" in kiwix_url else 8080
+                if not _start_kiwix_server(port):
+                    raise Exception(f"Could not connect to or start Kiwix server at {self.kiwix_url}")
+            else:
+                raise Exception(f"Could not connect to Kiwix server at {self.kiwix_url}: {e}")
         
         # Detect available models
         available_models = self._get_available_models()
@@ -818,27 +955,63 @@ Your synthesized answer with inline citations (stop after final paragraph):"""
                 print(f"\n❌ Error: {e}")
 
 
+def _check_ollama_running():
+    """Check if Ollama is running"""
+    try:
+        ollama.list()
+        return True
+    except Exception:
+        return False
+
+
+def _check_dependencies():
+    """Check all required dependencies"""
+    print("🔍 Checking dependencies...")
+    
+    # Check Ollama
+    if not _check_ollama_running():
+        print("❌ Ollama is not running")
+        print("   Start it with: ollama serve")
+        print("   Or install from: https://ollama.ai")
+        return False
+    print("✓ Ollama is running")
+    
+    return True
+
+
 def main():
-    parser = argparse.ArgumentParser(description='Offline Wikipedia RAG with Kiwix - Two-Stage AI Pipeline')
+    parser = argparse.ArgumentParser(
+        description='Offline Wikipedia RAG with Kiwix - Automatically handles setup',
+        epilog='The script will automatically start Kiwix server if needed.'
+    )
     parser.add_argument('--model', type=str, default=None,
-                        help='Summarization model (auto-detects: llama3.1:70b, gemma2:27b)')
+                        help='Summarization model (auto-detects: llama3.1:8b, gemma2:27b)')
     parser.add_argument('--selection-model', type=str, default=None,
-                        help='Selection model (auto-detects: qwen2.5:32b, mistral-small)')
+                        help='Selection model (auto-detects: mistral:7b, qwen2.5)')
     parser.add_argument('--kiwix-url', type=str, default='http://localhost:8080',
                         help='Kiwix server URL')
     parser.add_argument('--question', type=str,
                         help='Single question (otherwise interactive mode)')
     parser.add_argument('--max-results', type=int, default=None,
                         help='Number of Wikipedia articles to retrieve (auto-detects by complexity)')
+    parser.add_argument('--no-auto-start', action='store_true',
+                        help='Do not automatically start Kiwix server')
     
     args = parser.parse_args()
     
     try:
-        # Initialize RAG with two-stage pipeline
+        # Check dependencies
+        if not _check_dependencies():
+            return 1
+        
+        print()
+        
+        # Initialize RAG with two-stage pipeline (auto-starts Kiwix if needed)
         rag = KiwixWikipediaRAG(
             model_name=args.model,
             selection_model=args.selection_model,
-            kiwix_url=args.kiwix_url
+            kiwix_url=args.kiwix_url,
+            auto_start=not args.no_auto_start
         )
         
         if args.question:
@@ -868,11 +1041,11 @@ def main():
             # Interactive mode
             rag.interactive_mode()
     
+    except KeyboardInterrupt:
+        print("\n\n👋 Goodbye!")
+        return 0
     except Exception as e:
         print(f"\n❌ Error: {e}")
-        print("\n💡 Make sure:")
-        print("   1. Kiwix server is running: kiwix-serve ~/wikipedia-offline/*.zim")
-        print("   2. Ollama is running: ollama serve")
         return 1
 
 

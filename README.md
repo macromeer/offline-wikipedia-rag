@@ -115,7 +115,9 @@ of the universe.
 ======================================================================
 ```
 
-## 🚀 Quick Start (One-Line Install)
+## 🚀 Quick Start
+
+### One-Line Install
 
 ```bash
 # Clone and run automated setup
@@ -129,6 +131,21 @@ The installer will:
 2. ✅ Download complete Wikipedia (102GB)
 3. ✅ Set up all dependencies
 4. ✅ Test the system
+
+### Then Just Run It!
+
+After installation, it's super simple - no manual steps needed:
+
+```bash
+./run.sh
+```
+
+That's it! The script automatically:
+- ✅ Activates the correct Python environment
+- ✅ Checks if Ollama is running
+- ✅ Starts Kiwix server if needed
+- ✅ Detects best AI models available
+- ✅ Cleans up when you exit
 
 **Time needed:** 2-8 hours (mostly downloading)  
 **Disk space:** ~120GB
@@ -183,9 +200,11 @@ conda activate wikipedia-rag
 ### 3. Start Using
 
 ```bash
-./scripts/start_offline_rag.sh
-python wikipedia_rag_kiwix.py
+# Just run it - everything is automatic!
+./run.sh
 ```
+
+See [docs/AUTOMATIC_SETUP.md](docs/AUTOMATIC_SETUP.md) for details on what happens automatically.
 
 </details>
 
@@ -208,9 +227,28 @@ GPU support is **completely optional**:
 
 ## 🎯 Usage
 
-### Interactive Mode
+The script automatically handles everything - just run it! It will:
+- ✅ Check if Ollama is running
+- ✅ Auto-start Kiwix server if needed
+- ✅ Auto-detect best available models
+- ✅ Clean up on exit
+
+📖 See [docs/AUTOMATIC_SETUP.md](docs/AUTOMATIC_SETUP.md) for full details on automatic setup.
+
+### Easiest Way (Recommended)
 
 ```bash
+# One command - handles environment activation and everything!
+./run.sh
+```
+
+### Alternative (Manual Environment Activation)
+
+```bash
+# Activate environment
+mamba activate wikipedia-rag
+
+# Run the script
 python wikipedia_rag_kiwix.py
 ```
 
@@ -224,7 +262,11 @@ Then type your questions naturally:
 ### Single Question Mode
 
 ```bash
-python wikipedia_rag_kiwix.py --question "What is machine learning?"
+./run.sh --question "What is machine learning?"
+
+# Or with manual activation:
+# mamba activate wikipedia-rag
+# python wikipedia_rag_kiwix.py --question "What is machine learning?"
 ```
 
 ### Command Line Options
@@ -238,20 +280,19 @@ Options:
   --selection-model TEXT   Article selection model (default: auto-detect)
   --kiwix-url TEXT         Kiwix server URL (default: http://localhost:8080)
   --max-results INT        Number of articles (default: auto by complexity)
+  --no-auto-start          Don't automatically start Kiwix server
 ```
 
-### Recommended Models
+### Advanced: Specify Models
 
 ```bash
+# The script auto-detects the best models, but you can override:
+
 # Recommended setup (most users)
-python wikipedia_rag_kiwix.py \
-  --selection-model mistral:7b \
-  --model llama3.1:8b
+./run.sh --selection-model mistral:7b --model llama3.1:8b
 
 # Alternative for better selection (if you have 32GB+ RAM)
-python wikipedia_rag_kiwix.py \
-  --selection-model qwen2.5:32b-instruct \
-  --model llama3.1:8b
+./run.sh --selection-model qwen2.5:32b-instruct --model llama3.1:8b
 ```
 
 ## 🏗️ How It Works
