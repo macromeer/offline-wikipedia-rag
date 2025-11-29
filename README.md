@@ -1,65 +1,152 @@
-# 🌐 Free Offline AI with Full Wikipedia Knowledge
+# 🌐 Offline Wikipedia RAG
 
-**Chat with AI that has complete Wikipedia knowledge - 100% free, 100% offline, 100% private.**
-
-This project combines specialized AI models with the complete English Wikipedia to give you an intelligent assistant that works entirely offline, requires no API keys, and respects your privacy.
+**A private, offline AI assistant with the entire English Wikipedia at your fingertips.**
 
 [![Tests](https://github.com/macromeer/offline-wikipedia-rag/actions/workflows/tests.yml/badge.svg)](https://github.com/macromeer/offline-wikipedia-rag/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![codecov](https://codecov.io/gh/macromeer/offline-wikipedia-rag/branch/main/graph/badge.svg)](https://codecov.io/gh/macromeer/offline-wikipedia-rag)
 
-## ✨ Features
+## TL;DR
 
-### Why This Project?
-Unlike ChatGPT or other cloud AI services, this gives you:
-- **Complete privacy** - Your questions never leave your computer
-- **No costs** - Zero API fees, no subscriptions, truly unlimited use
-- **Always works** - No internet required, no rate limits, no downtime
-- **Full transparency** - See exactly which Wikipedia articles were used
-- **Research-grade citations** - Every fact is cited with clickable sources
+- 100% offline: Ollama + Kiwix + specialized models → answers with inline citations
+- Zero API keys, zero telemetry, zero cost
+- Pulls 6M+ English Wikipedia articles (≈102 GB) and answers in 10‑20 s on CPU
+- One command (`./run.sh`) to start chatting; optional installer handles everything
 
-### Core Features
-- 🔒 **100% Private** - Everything runs locally, no data leaves your computer
-- 🌍 **Complete Wikipedia** - Full English Wikipedia (6+ million articles, updated 2024)
-- 🤖 **Two-Stage AI Pipeline** - Specialized models for accurate article selection and synthesis
-- 💰 **Free Forever** - No API keys, no subscriptions, no limits
-- 📖 **Academic-Style Citations** - Inline citations [1][2][3] with clickable source URLs
+## 🚀 Quick Start
 
-### Smart Intelligence
-- 🎯 **Content-Based Article Selection** (85-88% accuracy)
-  - Retrieves 25+ candidate articles based on Kiwix search (matching query terms)
-  - AI reads article abstracts before selecting (not just titles)
-  - Intelligently filters to 3-6 best matches based on relevance
-  - Automatically excludes lists, stubs, disambiguation pages
-  - Direct lookup finds main articles (e.g., "Earthquake" not "List of earthquakes")
-  - Proper noun extraction (people, places, organizations, events)
-  
-- 🧠 **Adaptive Complexity Detection**
-  - Analyzes question structure using complexity scoring
-  - Scores based on indicators: multi-part questions, comparisons, analytical depth
-  - Simple questions: 3 articles with deep reading (~20 paragraphs each)
-  - Complex questions: 6 articles with balanced coverage (~10 paragraphs each)
-  - Multi-part questions automatically get more sources
-  
-- 🔬 **Two-Stage AI Pipeline**
-  - **Stage 1 - Selection**: Mistral-7B for fast, accurate classification
-  - **Stage 2 - Synthesis**: Llama-3.1-8B for coherent answer generation
-  - Specialized models for each task improve accuracy and consistency
-  - 10-18 second total response time with recommended setup
-  
-- 📝 **Research-Ready Output**
-  - Every fact cited with inline [1], [2], [3] references
-  - Clickable URLs to open source articles in browser
-  - Multi-source synthesis (combines info from all selected articles)
-  - Proper attribution prevents hallucination
+### Recommended (automated install)
 
-- ⚡ **Practical Performance**
-  - 10-18 second responses on standard hardware (16-24GB RAM)
-  - Works great on CPU (no GPU required)
-  - Automatic model detection and fallback
-  - Handles 6+ million Wikipedia articles efficiently
+```bash
+git clone https://github.com/macromeer/offline-wikipedia-rag.git
+cd offline-wikipedia-rag
+./scripts/install.sh        # installs Ollama, models, Wikipedia dump, env
+./run.sh                    # launches the assistant
+```
+
+Installer runtime: 2‑8 hours (mostly download). Disk: ~120 GB free.
+
+### Already have dependencies?
+
+```bash
+./run.sh
+```
+
+The launcher activates the conda env, checks Ollama, starts Kiwix if needed, finds the best local models, and tears everything down when you exit.
+
+## Requirements
+
+| Resource | Recommended |
+| --- | --- |
+| OS | Linux (Ubuntu 20.04+/Fedora 35+) or macOS |
+| Disk | ≥120 GB free (102 GB Wikipedia + models + env) |
+| RAM | 16‑24 GB for Mistral‑7B + Llama‑3.1‑8B |
+| CPU/GPU | Multi-core CPU. GPU optional (Ollama auto-detects CUDA/ROCm/Metal). |
+
+Smaller RAM works with smaller models; high-memory rigs can bump to Qwen2.5‑32B or Gemma2‑27B. See `docs/TWO_STAGE_AI_PIPELINE.md` for pairings.
+
+## Manual Setup (if you skip the installer)
+
+```bash
+# 1. Install Ollama and pull models
+curl -fsSL https://ollama.ai/install.sh | sh
+ollama pull mistral:7b          # selection
+ollama pull llama3.1:8b         # synthesis
+
+# 2. Create the Python env
+conda env create -f environment.yml
+conda activate wikipedia-rag
+
+# 3. Download Wikipedia (long download)
+./scripts/setup_full_offline_wikipedia.sh
+
+# 4. Run
+./run.sh
+```
+
+## Usage
+
+```bash
+# Preferred: handles env + services automatically
+./run.sh
+
+# Manual mode
+mamba activate wikipedia-rag
+python wikipedia_rag_kiwix.py --question "What is machine learning?"
+```
+
+While running you can ask follow-up questions interactively, or pass `--question` for single-shot mode. Helpful flags:
+
+```bash
+python wikipedia_rag_kiwix.py --help
+  --model llama3.1:8b           # override synthesis model
+  --selection-model mistral:7b  # override article selector
+  --max-results 4               # force number of articles
+  --no-auto-start               # skip auto Kiwix launch
+```
+
+Example session:
+
+```
+✓ Connected to Kiwix server at http://localhost:8080
+✓ Selection model: mistral:7b
+✓ Summarization model: llama3.1:8b
+🔍 Searching local Wikipedia for: What are the goals of NASA?
+  🔑 Focus keywords: nasa, goals, ...
+  📄 Fetching article abstracts…
+  🤖 Selecting with mistral:7b…
+✓ AI selected 3 article(s): Goals, NASA, Timeline of Solar System exploration
+… answer with citations …
+```
+
+## Highlights
+
+- Privacy by default – all computation happens locally (no telemetry, no API keys)
+- Full-text Wikipedia (January 2024) served via Kiwix
+- Two-stage pipeline: Mistral‑7B ranks articles using abstracts, Llama‑3.1‑8B synthesizes multi-source answers with inline `[1][2][3]` citations
+- Adaptive retrieval depth: 3‑6 articles depending on question complexity
+- Works on CPU, accelerates automatically if a GPU is available
+
+## Architecture (1‑minute view)
+
+```
+Question → term extraction → Kiwix search → abstract fetch →
+Stage 1 (selection model) → full article fetch → Stage 2 (synthesis model)
+→ Answer + clickable citations
+```
+
+Relevant docs:
+
+- `docs/TWO_STAGE_AI_PIPELINE.md` – model pairing benchmarks
+- `docs/AUTOMATIC_SETUP.md` – what `run.sh` and the installer configure
+
+## Testing
+
+```bash
+mamba activate wikipedia-rag
+pytest tests -v                 # full suite
+pytest tests/test_rag_functions.py -v
+pytest -m "not integration"     # skip network/Kiwix checks
+```
+
+Unit tests cover search-term extraction, complexity estimation, model detection, and mocked Kiwix flows. CI runs `tests.yml` on every PR.
+
+## Project Layout
+
+```
+offline-wikipedia-rag/
+├── run.sh / scripts/           # automation helpers
+├── wikipedia_rag_kiwix.py      # main application
+├── docs/                       # design notes and how-tos
+├── tests/                      # pytest suite
+├── environment.yml             # conda env
+└── README.md
+```
+
+## Contributing
+
+Issues and PRs are welcome! Ideas that help: additional language dumps, GUIs, Docker images, alternative model profiles, or performance/testing improvements. Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## 🎬 Demo
 
