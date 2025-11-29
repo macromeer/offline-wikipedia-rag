@@ -40,11 +40,13 @@ QUESTION_STOPWORDS = {
 }
 
 QUESTION_SKIP_WORDS = {
+    # Topic-agnostic filler terms and vague qualifiers
     'them', 'this', 'that', 'these', 'those', 'some', 'many', 'much', 'more', 'most',
-    'good', 'show', 'shows', 'movie', 'movies', 'film', 'films', 'series', 'season', 'seasons',
-    'tv', 'television', 'program', 'programme', 'programs', 'programmes', 'episode', 'episodes',
-    'worth', 'watch', 'watching', 'best', 'worst', 'great', 'awesome', 'awful', 'game', 'games',
-    'review', 'reviews', 'rating', 'ratings', 'people', 'person', 'thing', 'things'
+    'people', 'person', 'persons', 'anyone', 'anybody', 'everyone', 'everybody',
+    'someone', 'somebody', 'nobody', 'others', 'other', 'another',
+    'thing', 'things', 'something', 'anything', 'everything', 'nothing', 'stuff',
+    'good', 'bad', 'best', 'worst', 'better', 'great', 'awful', 'awesome', 'terrible', 'excellent', 'poor',
+    'worth', 'value', 'quality', 'type', 'types', 'kind', 'kinds'
 }
 
 KEYWORD_BLACKLIST = QUESTION_STOPWORDS.union(QUESTION_SKIP_WORDS)

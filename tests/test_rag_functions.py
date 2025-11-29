@@ -8,7 +8,19 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from wikipedia_rag_kiwix import KiwixWikipediaRAG
+from wikipedia_rag_kiwix import KiwixWikipediaRAG, QUESTION_SKIP_WORDS
+
+
+class TestLanguageFilters:
+    """Ensure language filters remain topic agnostic"""
+
+    def test_skip_words_do_not_encode_specific_domains(self):
+        domain_terms = {
+            'movie', 'movies', 'film', 'films', 'tv', 'television',
+            'show', 'shows', 'series', 'season', 'seasons',
+            'game', 'games'
+        }
+        assert domain_terms.isdisjoint(QUESTION_SKIP_WORDS)
 
 
 class TestSearchTermExtraction:
