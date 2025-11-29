@@ -312,6 +312,12 @@ class KiwixWikipediaRAG:
         q_lower = question.lower()
         terms = []
         
+        # Strategy 0: Extract quoted terms (e.g., "The Expanse")
+        quoted_terms = re.findall(r'["\']([^"\'\']+)["\']', question)
+        for term in quoted_terms:
+            if term.strip() and len(term.strip()) > 2:
+                terms.append(term.strip())
+        
         # Remove question words and common stopwords
         stopwords = {'what', 'when', 'where', 'who', 'whom', 'whose', 'why', 'which', 'how',
                     'is', 'are', 'was', 'were', 'am', 'been', 'being',
@@ -358,9 +364,9 @@ class KiwixWikipediaRAG:
         
         # Strategy 2: Use important single content words (capitalized for Wikipedia)
         # Skip very short words and common pronouns
-        skip_words = {'them', 'this', 'that', 'these', 'those', 'some', 'many', 'much', 'more', 'most'}
-        for word in content_words[:3]:
-            if word not in skip_words and len(word) > 4:  # At least 5 chars
+        skip_words = {'them', 'this', 'that', 'these', 'those', 'some', 'many', 'much', 'more', 'most', 'good', 'show'}
+        for word in content_words[:5]:  # Look at more words
+            if word not in skip_words and len(word) >= 4:  # At least 4 chars to catch words like "mars", "love", etc.
                 title = word.capitalize()
                 if title not in terms and title not in proper_nouns:
                     terms.append(title)
@@ -406,7 +412,26 @@ class KiwixWikipediaRAG:
                         all_results.append(r)
                         seen_titles.add(title_lower)
             
-            # Strategy 2: Direct lookup for main article (singular form)  
+            # Strategy 2: Try TV show/movie/media format (common Wikipedia pattern)
+            # e.g., "The Expanse" -> "The Expanse (TV series)"
+            for term in search_terms[:3]:
+                if len(all_results) >= 100:
+                    break
+                for suffix in [" (TV series)", " (film)", " (TV show)", " (television)"]:
+                    media_title = f"{term}{suffix}"
+                    media_url = f"{self.kiwix_url}/wikipedia_en_all_maxi_2024-01/A/{media_title.replace(' ', '_')}"
+                    try:
+                        response = requests.head(media_url, timeout=2, allow_redirects=True)
+                        if response.status_code == 200:
+                            title_lower = media_title.lower()
+                            if title_lower not in seen_titles:
+                                all_results.insert(0, {'title': media_title, 'url': media_url})
+                                seen_titles.add(title_lower)
+                                break  # Found it, move to next term
+                    except:
+                        pass
+            
+            # Strategy 3: Direct lookup for main article (singular form)  
             # This helps find "Earthquake" even when lists come first alphabetically
             for term in search_terms[:3]:  # Try first 3 terms as direct lookups
                 if len(all_results) >= 100:
@@ -497,6 +522,37 @@ class KiwixWikipediaRAG:
         if len(search_results) <= target_count:
             return search_results
         
+        # Pre-sort results to prioritize likely main articles
+        # This helps the AI see the most relevant candidates first
+        def relevance_score(result):
+            title = result['title'].lower()
+            score = 0
+            
+            # Strong boost for TV/film/media articles
+            if any(suffix in title for suffix in [' (tv series)', ' (film)', ' (tv show)', ' (television)']):
+                score += 100
+            
+            # Penalize lists and meta-articles
+            if title.startswith('list of') or title.startswith('lists of'):
+                score -= 50
+            if 'disambiguation' in title or 'index of' in title:
+                score -= 40
+            
+            # Boost articles with substantial abstracts
+            abstract = result.get('abstract', '')
+            if len(abstract) > 200:
+                score += 20
+            elif len(abstract) > 100:
+                score += 10
+            
+            # Boost shorter titles (usually more general/main articles)
+            if len(title) < 30:
+                score += 5
+            
+            return score
+        
+        search_results = sorted(search_results, key=relevance_score, reverse=True)
+        
         # Build article list with abstracts for informed classification
         articles_text = ""
         article_index_map = {}  # Map displayed number to actual index
@@ -530,29 +586,44 @@ class KiwixWikipediaRAG:
         print(f"  🤖 Selecting with {self.selection_model} (using article abstracts)...")
         
         # Classification-optimized prompt with content-based selection
-        selection_prompt = f"""You are a research assistant selecting Wikipedia articles to answer a question.
+        selection_prompt = f"""You are selecting Wikipedia articles to answer this question:
 
 Question: "{question}"
 
-Available articles with previews:
+Available articles:
 {articles_text}
 
-Task: Select the {target_count} MOST RELEVANT articles that directly answer ALL PARTS of the question.
+Task: Select the {target_count} MOST RELEVANT articles.
 
-Selection criteria:
-✓ For questions with multiple parts (e.g., "what causes X and can we predict X"): Select articles covering BOTH aspects
-✓ ALWAYS include the main encyclopedic article about the subject (e.g., "Earthquakes" for earthquake questions)
-✓ For "who is" questions: Select biographical articles about that person
-✓ For "what causes" questions: Select main articles explaining that phenomenon
-✓ For "can we predict" questions: Select articles about prediction of that specific thing (not general "prediction")
-✓ Balance between general/main articles and specialized subtopics
-✗ Avoid: Articles that only share a keyword but different topic (e.g., "prediction markets" is NOT about "earthquake prediction")
-✗ Avoid: Lists, year-specific articles, episode lists, song lists, disambiguation pages
-✗ Avoid: Tangentially related topics (e.g., songs about a person vs. the person themselves)
+RULES:
+1. ALWAYS select the main article about the question's primary topic
+   - "The Expanse TV show" → select "The Expanse (TV series)"
+   - "Albert Einstein" → select "Albert Einstein" biography
+   - "earthquakes" → select "Earthquake" main article
 
-Critical: Focus on the question's MAIN SUBJECT. Don't select articles just because they contain one keyword from the question.
+2. For TV shows, movies, books:
+   - Select the main article about that specific work
+   - REJECT: songs, unrelated topics with similar names
+   - Example: "The Expanse" show ≠ "Expanse" (geography term)
 
-Output ONLY the article numbers, comma-separated (example: "3,7,12"):
+3. Match the question's intent:
+   - "Is X good?" → select main article about X
+   - "Who is X?" → select biographical article
+   - "What causes X?" → select article explaining X
+
+4. REJECT:
+   - Articles about different topics that share a word
+   - Lists, episodes, songs, year pages
+   - Tangentially related topics
+
+Examples:
+Q: "Is The Expanse a good show?"
+→ Select: "The Expanse (TV series)" NOT "Expanse" or "Good Mythical Morning"
+
+Q: "Tell me about earthquakes"
+→ Select: "Earthquake" main article NOT "List of earthquakes"
+
+Output ONLY comma-separated numbers (example: 2,5,8):
 """
         
         try:
