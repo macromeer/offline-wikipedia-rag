@@ -49,6 +49,17 @@ class TestSearchTermExtraction:
         assert 'the' not in [t.lower() for t in terms]
         assert 'is' not in [t.lower() for t in terms]
 
+    def test_primary_keywords_handle_lowercase_titles(self):
+        """Ensure primary keyword extraction finds lowercase media titles"""
+        rag = Mock(spec=KiwixWikipediaRAG)
+        rag.extract_search_terms = KiwixWikipediaRAG.extract_search_terms.__get__(rag)
+        rag.extract_primary_keywords = KiwixWikipediaRAG.extract_primary_keywords.__get__(rag)
+
+        question = "is the expanse a good tv show?"
+        keywords = rag.extract_primary_keywords(question)
+
+        assert any('expanse' == kw for kw in keywords)
+
 
 class TestComplexityEstimation:
     """Test question complexity estimation"""

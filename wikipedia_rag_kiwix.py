@@ -23,6 +23,33 @@ from pathlib import Path
 _kiwix_process = None
 
 
+# Shared language filters for query understanding/keyword extraction
+QUESTION_STOPWORDS = {
+    'what', 'when', 'where', 'who', 'whom', 'whose', 'why', 'which', 'how',
+    'is', 'are', 'was', 'were', 'am', 'been', 'being',
+    'does', 'do', 'did', 'done', 'doing',
+    'can', 'could', 'will', 'would', 'shall', 'should', 'may', 'might', 'must',
+    'the', 'a', 'an', 'and', 'or', 'but', 'if', 'then',
+    'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'about',
+    'as', 'into', 'through', 'during', 'before', 'after', 'above', 'below',
+    'its', 'it', 'has', 'have', 'had', 'having',
+    'this', 'that', 'these', 'those',
+    'me', 'you', 'tell', 'explain', 'describe', 'define',
+    'cause', 'causes', 'caused',
+    'become', 'became', 'get', 'got', 'make', 'made', 'take', 'took'
+}
+
+QUESTION_SKIP_WORDS = {
+    'them', 'this', 'that', 'these', 'those', 'some', 'many', 'much', 'more', 'most',
+    'good', 'show', 'shows', 'movie', 'movies', 'film', 'films', 'series', 'season', 'seasons',
+    'tv', 'television', 'program', 'programme', 'programs', 'programmes', 'episode', 'episodes',
+    'worth', 'watch', 'watching', 'best', 'worst', 'great', 'awesome', 'awful', 'game', 'games',
+    'review', 'reviews', 'rating', 'ratings', 'people', 'person', 'thing', 'things'
+}
+
+KEYWORD_BLACKLIST = QUESTION_STOPWORDS.union(QUESTION_SKIP_WORDS)
+
+
 def _find_kiwix_binary():
     """Find kiwix-serve binary in common locations"""
     locations = [
@@ -319,19 +346,7 @@ class KiwixWikipediaRAG:
                 terms.append(term.strip())
         
         # Remove question words and common stopwords
-        stopwords = {'what', 'when', 'where', 'who', 'whom', 'whose', 'why', 'which', 'how',
-                    'is', 'are', 'was', 'were', 'am', 'been', 'being',
-                    'does', 'do', 'did', 'done', 'doing',
-                    'can', 'could', 'will', 'would', 'shall', 'should', 'may', 'might', 'must',
-                    'the', 'a', 'an', 'and', 'or', 'but', 'if', 'then',
-                    'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'about',
-                    'as', 'into', 'through', 'during', 'before', 'after', 'above', 'below',
-                    'its', 'it', 'has', 'have', 'had', 'having',
-                    'this', 'that', 'these', 'those',
-                    'me', 'you', 'tell', 'explain', 'describe', 'define',
-                    'cause', 'causes', 'caused',
-                    # Add common verbs that shouldn't be search terms
-                    'become', 'became', 'get', 'got', 'make', 'made', 'take', 'took'}
+        stopwords = QUESTION_STOPWORDS
         
         # Extract proper nouns (capitalized words in original question)
         words_original = question.replace('?', '').replace(',', '').replace('.', '').split()
@@ -364,7 +379,7 @@ class KiwixWikipediaRAG:
         
         # Strategy 2: Use important single content words (capitalized for Wikipedia)
         # Skip very short words and common pronouns
-        skip_words = {'them', 'this', 'that', 'these', 'those', 'some', 'many', 'much', 'more', 'most', 'good', 'show'}
+        skip_words = QUESTION_SKIP_WORDS
         for word in content_words[:5]:  # Look at more words
             if word not in skip_words and len(word) >= 4:  # At least 4 chars to catch words like "mars", "love", etc.
                 title = word.capitalize()
@@ -373,13 +388,64 @@ class KiwixWikipediaRAG:
         
         # Strategy 3: Try consecutive word pairs from content words
         for i in range(min(2, len(content_words) - 1)):
+            if content_words[i] in skip_words or content_words[i+1] in skip_words:
+                continue
             phrase = f"{content_words[i].capitalize()} {content_words[i+1]}"
             if phrase not in terms:
                 terms.append(phrase)
         
         return terms[:5] if terms else [question]
+
+    def extract_primary_keywords(self, question: str) -> List[str]:
+        """Derive primary topical keywords (lowercase) from the question text"""
+        normalized_tokens = re.findall(r"[a-z0-9']+", question.lower())
+        base_tokens: List[str] = []
+        for token in normalized_tokens:
+            if len(token) < 3:
+                continue
+            if token in KEYWORD_BLACKLIST:
+                continue
+            if token not in base_tokens:
+                base_tokens.append(token)
+        try:
+            search_terms = self.extract_search_terms(question)
+        except Exception:
+            search_terms = []
+        for term in search_terms:
+            for token in re.split(r"[\s\-_/()]+", term.lower()):
+                token = token.strip()
+                if len(token) < 3 or token in KEYWORD_BLACKLIST:
+                    continue
+                if token not in base_tokens:
+                    base_tokens.append(token)
+        keywords: List[str] = []
+        def _add_keyword(value: str):
+            value = value.strip()
+            if value and value not in keywords:
+                keywords.append(value)
+        for token in base_tokens:
+            _add_keyword(token)
+        for i in range(len(base_tokens) - 1):
+            first_token = base_tokens[i]
+            second_token = base_tokens[i + 1]
+            if first_token in KEYWORD_BLACKLIST or second_token in KEYWORD_BLACKLIST:
+                continue
+            pair = f"{first_token} {second_token}"
+            _add_keyword(pair)
+        if not keywords:
+            fallback = [w for w in normalized_tokens if len(w) >= 4]
+            if fallback:
+                _add_keyword(fallback[0])
+        return keywords[:6]
+
+    def _title_matches_keywords(self, title: str, keywords: List[str]) -> bool:
+        """Check if a title contains any of the requested keywords"""
+        if not keywords:
+            return True
+        title_lower = title.lower()
+        return any(keyword in title_lower for keyword in keywords)
     
-    def search_kiwix(self, query: str, max_results: int = 25) -> List[Dict]:
+    def search_kiwix(self, query: str, max_results: int = 25, primary_keywords: List[str] = None) -> List[Dict]:
         """
         Search local Wikipedia via Kiwix using Wikipedia title conventions
         
@@ -389,6 +455,7 @@ class KiwixWikipediaRAG:
         Args:
             query: Search query (user's question)
             max_results: Maximum number of results to retrieve per search term
+            primary_keywords: Optional keywords to prioritize when ordering results
             
         Returns:
             List of search results with titles and URLs
@@ -449,6 +516,15 @@ class KiwixWikipediaRAG:
                 except:
                     pass  # Article doesn't exist or failed to load
             
+            if primary_keywords:
+                prioritized, others = [], []
+                for result in all_results:
+                    if self._title_matches_keywords(result['title'], primary_keywords):
+                        prioritized.append(result)
+                    else:
+                        others.append(result)
+                if prioritized:
+                    all_results = prioritized + others
             print(f"  ✓ Retrieved {len(all_results)} unique candidates")
             return all_results
             
@@ -504,93 +580,81 @@ class KiwixWikipediaRAG:
         except:
             return ""
     
-    def select_relevant_articles(self, question: str, search_results: List[Dict], target_count: int) -> List[Dict]:
+    def select_relevant_articles(self, question: str, search_results: List[Dict], target_count: int, primary_keywords: List[str] = None) -> List[Dict]:
         """
         Stage 1: Use specialized classification model for article selection
-        
-        Now uses article abstracts (first paragraphs) to make informed decisions
-        about relevance. Uses Mistral-7B or similar for reliable classification.
         
         Args:
             question: User's question
             search_results: List of article titles, URLs, and abstracts from search
             target_count: Number of articles to select
-            
-        Returns:
-            Filtered list of most relevant articles
+            primary_keywords: Keyword hints extracted from the user question
         """
         if len(search_results) <= target_count:
             return search_results
-        
-        # Pre-sort results to prioritize likely main articles
-        # This helps the AI see the most relevant candidates first
+        keywords = primary_keywords or []
+
         def relevance_score(result):
             title = result['title'].lower()
             score = 0
-            
-            # Strong boost for TV/film/media articles
             if any(suffix in title for suffix in [' (tv series)', ' (film)', ' (tv show)', ' (television)']):
                 score += 100
-            
-            # Penalize lists and meta-articles
             if title.startswith('list of') or title.startswith('lists of'):
                 score -= 50
             if 'disambiguation' in title or 'index of' in title:
                 score -= 40
-            
-            # Boost articles with substantial abstracts
             abstract = result.get('abstract', '')
             if len(abstract) > 200:
                 score += 20
             elif len(abstract) > 100:
                 score += 10
-            
-            # Boost shorter titles (usually more general/main articles)
+            if keywords and abstract:
+                abstract_lower = abstract.lower()
+                if any(keyword in abstract_lower for keyword in keywords):
+                    score += 25
             if len(title) < 30:
                 score += 5
-            
+            if keywords:
+                if self._title_matches_keywords(title, keywords):
+                    score += 80
+                else:
+                    score -= 60
             return score
-        
+
         search_results = sorted(search_results, key=relevance_score, reverse=True)
-        
-        # Build article list with abstracts for informed classification
+
         articles_text = ""
-        article_index_map = {}  # Map displayed number to actual index
+        article_index_map: Dict[int, int] = {}
         display_num = 1
-        
-        for i, result in enumerate(search_results[:30]):  # Limit to first 30 for prompt length
+        for i, result in enumerate(search_results[:30]):
             title = result['title']
             abstract = result.get('abstract', '')
-            
-            # Include articles with abstracts, or at minimum show the title
-            # Lower threshold to 30 chars to catch more main articles
             if abstract and len(abstract) > 30:
                 article_index_map[display_num] = i
-                # Truncate abstract to keep prompt manageable
                 abstract_preview = abstract[:200] + "..." if len(abstract) > 200 else abstract
                 articles_text += f"{display_num}. **{title}**\n   {abstract_preview}\n\n"
                 display_num += 1
             elif not title.lower().startswith('list of') and not title.lower().startswith('lists of'):
-                # Include non-list articles even without abstracts (they might be main articles)
                 article_index_map[display_num] = i
                 articles_text += f"{display_num}. **{title}**\n   (Main article)\n\n"
                 display_num += 1
-        
+
         if not articles_text:
-            # Fallback: include all if filtering was too aggressive
             for i, result in enumerate(search_results[:15]):
-                article_index_map[i+1] = i
+                article_index_map[i + 1] = i
                 title = result['title']
                 articles_text += f"{i+1}. **{title}**\n\n"
-        
+
         print(f"  🤖 Selecting with {self.selection_model} (using article abstracts)...")
-        
-        # Classification-optimized prompt with content-based selection
+        keyword_note = ""
+        if keywords:
+            keyword_note = "Primary topic keywords: " + ', '.join(f'"{kw}"' for kw in keywords[:4]) + "\n\n"
+
         selection_prompt = f"""You are selecting Wikipedia articles to answer this question:
 
 Question: "{question}"
 
-Available articles:
+{keyword_note if keyword_note else ''}Available articles:
 {articles_text}
 
 Task: Select the {target_count} MOST RELEVANT articles.
@@ -601,17 +665,19 @@ RULES:
    - "Albert Einstein" → select "Albert Einstein" biography
    - "earthquakes" → select "Earthquake" main article
 
-2. For TV shows, movies, books:
+2. When keywords are provided above, every selected article MUST contain those keywords (or obvious singular/plural variants) in the title or abstract
+
+3. For TV shows, movies, books:
    - Select the main article about that specific work
    - REJECT: songs, unrelated topics with similar names
    - Example: "The Expanse" show ≠ "Expanse" (geography term)
 
-3. Match the question's intent:
+4. Match the question's intent:
    - "Is X good?" → select main article about X
    - "Who is X?" → select biographical article
    - "What causes X?" → select article explaining X
 
-4. REJECT:
+5. REJECT:
    - Articles about different topics that share a word
    - Lists, episodes, songs, year pages
    - Tangentially related topics
@@ -625,28 +691,20 @@ Q: "Tell me about earthquakes"
 
 Output ONLY comma-separated numbers (example: 2,5,8):
 """
-        
+
         try:
             response = ollama.chat(
                 model=self.selection_model,
                 messages=[{'role': 'user', 'content': selection_prompt}],
                 options={
                     'num_predict': 200,
-                    'temperature': 0.2,  # Very low temperature for consistent classification
+                    'temperature': 0.2,
                     'top_p': 0.9,
                 }
             )
-            
-            # Parse article numbers from response
             answer = response['message']['content'].strip()
-            
-            # Handle empty response
-            if not answer:
-                print(f"  ⚠ Selection model returned empty response, using fallback")
-            else:
+            if answer:
                 numbers = re.findall(r'\d+', answer)
-                
-                # Map displayed numbers back to actual indices, removing duplicates
                 seen_indices = set()
                 indices = []
                 for n in numbers:
@@ -656,31 +714,31 @@ Output ONLY comma-separated numbers (example: 2,5,8):
                         if actual_idx not in seen_indices:
                             indices.append(actual_idx)
                             seen_indices.add(actual_idx)
-                
-                indices = indices[:target_count]  # Limit to target count
-                
+                indices = indices[:target_count]
                 if indices:
                     selected = [search_results[i] for i in indices]
-                    
-                    # Accept selection if we got at least 1 good article
-                    # The AI might rightfully reject poor candidates (lists, etc.)
-                    if len(selected) >= 1:
+                    if selected:
                         return selected
-                
-                print(f"  ⚠ Selection returned no valid results, using fallback")
-                    
+            print(f"  ⚠ Selection returned no valid results, using fallback")
         except Exception as e:
             print(f"  ⚠ Selection error: {e}")
-        
-        # Fallback: rule-based filtering
+
         filtered = [r for r in search_results if not (
             r['title'].lower().startswith('list of') or
             r['title'].lower().startswith('lists of') or
             re.search(r'\b(19|20)\d{2}\b', r['title']) or
             'disambiguation' in r['title'].lower()
         )]
+        if keywords:
+            keyword_filtered = [r for r in filtered if self._title_matches_keywords(r['title'], keywords)]
+            if keyword_filtered:
+                filtered = keyword_filtered
+            else:
+                keyword_filtered = [r for r in search_results if self._title_matches_keywords(r['title'], keywords)]
+                if keyword_filtered:
+                    filtered = keyword_filtered
         return (filtered or search_results)[:target_count]
-    
+
     def fetch_article(self, url: str, max_paragraphs: int = None) -> str:
         """
         Fetch article content from Kiwix
@@ -814,9 +872,12 @@ Output ONLY comma-separated numbers (example: 2,5,8):
             max_results = self.estimate_question_complexity(question)
         
         print(f"\n🔍 Searching local Wikipedia for: {question}")
+        primary_keywords = self.extract_primary_keywords(question)
+        if primary_keywords:
+            print(f"  🔑 Focus keywords: {', '.join(primary_keywords[:4])}")
         
         # Step 1: Search Kiwix (retrieves 3x more results)
-        search_results = self.search_kiwix(question, max_results=max_results)
+        search_results = self.search_kiwix(question, max_results=max_results, primary_keywords=primary_keywords)
         
         if not search_results:
             return {
@@ -837,7 +898,7 @@ Output ONLY comma-separated numbers (example: 2,5,8):
             result['abstract'] = abstract
         
         # Step 2: Use AI to select most relevant articles with context
-        selected_results = self.select_relevant_articles(question, search_results, max_results)
+        selected_results = self.select_relevant_articles(question, search_results, max_results, primary_keywords=primary_keywords)
         
         selected_titles = [r['title'] for r in selected_results]
         print(f"✓ AI selected {len(selected_results)} article(s): {', '.join(selected_titles)}")
