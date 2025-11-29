@@ -60,6 +60,17 @@ class TestSearchTermExtraction:
 
         assert any('expanse' == kw for kw in keywords)
 
+    def test_focus_phrases_from_quotes(self):
+        """Quoted segments should become focus phrases"""
+        rag = Mock(spec=KiwixWikipediaRAG)
+        rag.extract_search_terms = KiwixWikipediaRAG.extract_search_terms.__get__(rag)
+        rag.extract_focus_phrases = KiwixWikipediaRAG.extract_focus_phrases.__get__(rag)
+
+        question = 'Is "Star Trek - Next Generation" a good tv show?'
+        phrases = rag.extract_focus_phrases(question)
+
+        assert any('Star Trek - Next Generation' in phrase for phrase in phrases)
+
 
 class TestComplexityEstimation:
     """Test question complexity estimation"""
@@ -96,6 +107,22 @@ class TestComplexityEstimation:
         
         # Comparison should get more articles
         assert complexity >= 5
+
+
+class TestKeywordMatching:
+    """Test helper functions related to keyword and phrase matching"""
+
+    def test_title_matches_keywords_requires_multiple_hits(self):
+        rag = KiwixWikipediaRAG.__new__(KiwixWikipediaRAG)
+        keywords = ['star', 'trek', 'generation']
+        assert rag._title_matches_keywords('Star Trek: The Next Generation', keywords)
+        assert not rag._title_matches_keywords("List of Britain's Next Top Model contestants", keywords)
+
+    def test_title_matches_focus_phrase(self):
+        rag = KiwixWikipediaRAG.__new__(KiwixWikipediaRAG)
+        phrases = ['Star Trek - Next Generation']
+        assert rag._title_matches_focus_phrase('Star Trek: The Next Generation', phrases)
+        assert not rag._title_matches_focus_phrase('Star Trek: Voyager', phrases)
     
     def test_long_analytical_question(self):
         """Test detection of analytical questions"""

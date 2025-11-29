@@ -49,6 +49,9 @@ QUESTION_SKIP_WORDS = {
 
 KEYWORD_BLACKLIST = QUESTION_STOPWORDS.union(QUESTION_SKIP_WORDS)
 
+def _normalize_for_match(text: str) -> str:
+    tokens = re.findall(r"[a-z0-9]+", text.lower())
+    return " ".join(tokens)
 
 def _find_kiwix_binary():
     """Find kiwix-serve binary in common locations"""
@@ -438,14 +441,78 @@ class KiwixWikipediaRAG:
                 _add_keyword(fallback[0])
         return keywords[:6]
 
+    def extract_focus_phrases(self, question: str) -> List[str]:
+        """Return multi-word phrases that should be treated as primary topics"""
+        phrases: List[str] = []
+
+        def _add_phrase(raw_value: str):
+            raw_value = raw_value.strip()
+            normalized = _normalize_for_match(raw_value)
+            if not raw_value or not normalized:
+                return
+            if len(normalized.split()) < 2:
+                return
+            if raw_value not in phrases:
+                phrases.append(raw_value)
+
+        # Strategy 1: quoted spans
+        for match in re.findall(r'"([^"]+)"|\'([^\']+)\'', question):
+            candidate = match[0] or match[1]
+            _add_phrase(candidate)
+
+        # Strategy 2: proper nouns / extracted search terms with spaces
+        try:
+            search_terms = self.extract_search_terms(question)
+        except Exception:
+            search_terms = []
+        for term in search_terms:
+            if ' ' in term and term not in phrases:
+                _add_phrase(term)
+
+        return phrases[:4]
+
     def _title_matches_keywords(self, title: str, keywords: List[str]) -> bool:
-        """Check if a title contains any of the requested keywords"""
+        """Check if title contains enough keyword overlap"""
         if not keywords:
             return True
-        title_lower = title.lower()
-        return any(keyword in title_lower for keyword in keywords)
+        normalized_title = _normalize_for_match(title)
+        matches = 0
+        for keyword in keywords:
+            normalized_keyword = _normalize_for_match(keyword)
+            if not normalized_keyword:
+                continue
+            if normalized_keyword in normalized_title:
+                matches += 1
+        if matches == 0:
+            return False
+        if len(keywords) >= 3:
+            return matches >= 2
+        return matches >= 1
+
+    def _title_matches_focus_phrase(self, title: str, phrases: List[str]) -> bool:
+        if not phrases:
+            return False
+        title_tokens = _normalize_for_match(title).split()
+        if not title_tokens:
+            return False
+        for phrase in phrases:
+            phrase_tokens = _normalize_for_match(phrase).split()
+            if not phrase_tokens:
+                continue
+            pos = 0
+            matched_all = True
+            for token in phrase_tokens:
+                while pos < len(title_tokens) and title_tokens[pos] != token:
+                    pos += 1
+                if pos == len(title_tokens):
+                    matched_all = False
+                    break
+                pos += 1
+            if matched_all:
+                return True
+        return False
     
-    def search_kiwix(self, query: str, max_results: int = 25, primary_keywords: List[str] = None) -> List[Dict]:
+    def search_kiwix(self, query: str, max_results: int = 25, primary_keywords: List[str] = None, focus_phrases: List[str] = None) -> List[Dict]:
         """
         Search local Wikipedia via Kiwix using Wikipedia title conventions
         
@@ -456,6 +523,7 @@ class KiwixWikipediaRAG:
             query: Search query (user's question)
             max_results: Maximum number of results to retrieve per search term
             primary_keywords: Optional keywords to prioritize when ordering results
+            focus_phrases: Multi-word phrases that should be prioritized
             
         Returns:
             List of search results with titles and URLs
@@ -525,6 +593,15 @@ class KiwixWikipediaRAG:
                         others.append(result)
                 if prioritized:
                     all_results = prioritized + others
+            if focus_phrases:
+                phrase_hits, remainder = [], []
+                for result in all_results:
+                    if self._title_matches_focus_phrase(result['title'], focus_phrases):
+                        phrase_hits.append(result)
+                    else:
+                        remainder.append(result)
+                if phrase_hits:
+                    all_results = phrase_hits + remainder
             print(f"  ✓ Retrieved {len(all_results)} unique candidates")
             return all_results
             
@@ -580,7 +657,7 @@ class KiwixWikipediaRAG:
         except:
             return ""
     
-    def select_relevant_articles(self, question: str, search_results: List[Dict], target_count: int, primary_keywords: List[str] = None) -> List[Dict]:
+    def select_relevant_articles(self, question: str, search_results: List[Dict], target_count: int, primary_keywords: List[str] = None, focus_phrases: List[str] = None) -> List[Dict]:
         """
         Stage 1: Use specialized classification model for article selection
         
@@ -589,10 +666,13 @@ class KiwixWikipediaRAG:
             search_results: List of article titles, URLs, and abstracts from search
             target_count: Number of articles to select
             primary_keywords: Keyword hints extracted from the user question
+            focus_phrases: Multi-word phrases extracted from the user question
         """
         if len(search_results) <= target_count:
             return search_results
         keywords = primary_keywords or []
+        phrases = focus_phrases or []
+        has_phrase_candidate = bool(phrases and any(self._title_matches_focus_phrase(r['title'], phrases) for r in search_results))
 
         def relevance_score(result):
             title = result['title'].lower()
@@ -603,6 +683,12 @@ class KiwixWikipediaRAG:
                 score -= 50
             if 'disambiguation' in title or 'index of' in title:
                 score -= 40
+            phrase_match = self._title_matches_focus_phrase(result['title'], phrases)
+            if has_phrase_candidate:
+                if phrase_match:
+                    score += 200
+                else:
+                    score -= 90
             abstract = result.get('abstract', '')
             if len(abstract) > 200:
                 score += 20
@@ -619,6 +705,8 @@ class KiwixWikipediaRAG:
                     score += 80
                 else:
                     score -= 60
+            if phrases and not has_phrase_candidate and phrase_match:
+                score += 60
             return score
 
         search_results = sorted(search_results, key=relevance_score, reverse=True)
@@ -648,12 +736,17 @@ class KiwixWikipediaRAG:
         print(f"  🤖 Selecting with {self.selection_model} (using article abstracts)...")
         keyword_note = ""
         if keywords:
-            keyword_note = "Primary topic keywords: " + ', '.join(f'"{kw}"' for kw in keywords[:4]) + "\n\n"
+            keyword_note = "Primary topic keywords: " + ', '.join(f'"{kw}"' for kw in keywords[:4]) + "\n"
+        phrase_note = ""
+        if phrases:
+            phrase_note = "Focus phrases: " + ', '.join(f'"{ph}"' for ph in phrases[:2]) + "\n"
+        header_note = (keyword_note + phrase_note + "\n") if (keyword_note or phrase_note) else ""
 
         selection_prompt = f"""You are selecting Wikipedia articles to answer this question:
 
 Question: "{question}"
 
+{header_note}Available articles:
 {keyword_note if keyword_note else ''}Available articles:
 {articles_text}
 
@@ -667,17 +760,19 @@ RULES:
 
 2. When keywords are provided above, every selected article MUST contain those keywords (or obvious singular/plural variants) in the title or abstract
 
-3. For TV shows, movies, books:
+3. When focus phrases are provided above, prioritize articles whose titles contain that exact phrase (punctuation differences are OK)
+
+4. For TV shows, movies, books:
    - Select the main article about that specific work
    - REJECT: songs, unrelated topics with similar names
    - Example: "The Expanse" show ≠ "Expanse" (geography term)
 
-4. Match the question's intent:
+5. Match the question's intent:
    - "Is X good?" → select main article about X
    - "Who is X?" → select biographical article
    - "What causes X?" → select article explaining X
 
-5. REJECT:
+6. REJECT:
    - Articles about different topics that share a word
    - Lists, episodes, songs, year pages
    - Tangentially related topics
@@ -737,6 +832,10 @@ Output ONLY comma-separated numbers (example: 2,5,8):
                 keyword_filtered = [r for r in search_results if self._title_matches_keywords(r['title'], keywords)]
                 if keyword_filtered:
                     filtered = keyword_filtered
+        if phrases:
+            phrase_filtered = [r for r in filtered if self._title_matches_focus_phrase(r['title'], phrases)]
+            if phrase_filtered:
+                filtered = phrase_filtered
         return (filtered or search_results)[:target_count]
 
     def fetch_article(self, url: str, max_paragraphs: int = None) -> str:
@@ -873,11 +972,14 @@ Output ONLY comma-separated numbers (example: 2,5,8):
         
         print(f"\n🔍 Searching local Wikipedia for: {question}")
         primary_keywords = self.extract_primary_keywords(question)
+        focus_phrases = self.extract_focus_phrases(question)
         if primary_keywords:
             print(f"  🔑 Focus keywords: {', '.join(primary_keywords[:4])}")
+        if focus_phrases:
+            print(f"  🧭 Focus phrases: {', '.join(focus_phrases[:2])}")
         
         # Step 1: Search Kiwix (retrieves 3x more results)
-        search_results = self.search_kiwix(question, max_results=max_results, primary_keywords=primary_keywords)
+        search_results = self.search_kiwix(question, max_results=max_results, primary_keywords=primary_keywords, focus_phrases=focus_phrases)
         
         if not search_results:
             return {
@@ -898,7 +1000,7 @@ Output ONLY comma-separated numbers (example: 2,5,8):
             result['abstract'] = abstract
         
         # Step 2: Use AI to select most relevant articles with context
-        selected_results = self.select_relevant_articles(question, search_results, max_results, primary_keywords=primary_keywords)
+        selected_results = self.select_relevant_articles(question, search_results, max_results, primary_keywords=primary_keywords, focus_phrases=focus_phrases)
         
         selected_titles = [r['title'] for r in selected_results]
         print(f"✓ AI selected {len(selected_results)} article(s): {', '.join(selected_titles)}")
@@ -970,14 +1072,15 @@ Article Contents:
 {context}
 
 SYNTHESIS INSTRUCTIONS:
-1. **Comprehensiveness**: Integrate information from ALL articles to provide a complete answer
-2. **Coherence**: Create a logical narrative that connects concepts across articles
-3. **Evidence**: Include specific facts, dates, numbers, and key concepts
-4. **Perspectives**: If articles present different viewpoints, acknowledge and explain them
-5. **Structure**: Write in clear paragraphs; use lists only when appropriate
-6. **Accuracy**: Maintain factual consistency; do not infer beyond the articles
-7. **Clarity**: Be thorough yet concise; avoid unnecessary repetition
-8. **Citations**: Add inline citations [1], [2], [3] after EVERY fact or statement from the articles
+1. **Direct Verdict**: The first sentence must explicitly answer the question (e.g., "Yes, the film earned overwhelmingly positive reviews for... [1]"). Make the stance clear (yes/no/mixed) before adding context.
+2. **Stay On-Task**: Only include details that help judge quality/relevance of the topic. Omit long cast lists or plot summaries unless they support the verdict.
+3. **Comprehensiveness**: Integrate information from ALL articles to support the verdict.
+4. **Coherence**: Create a logical narrative that links supporting evidence.
+5. **Evidence**: Use concrete facts (awards, box office, critical reception) with citations.
+6. **Perspectives**: Note differing viewpoints if present, and explain them.
+7. **Structure**: Write in clear paragraphs; use lists only when essential.
+8. **Accuracy**: Stay within the provided articles; do not invent data.
+9. **Citations**: Add inline citations [1], [2], [3] after EVERY fact drawn from the articles.
 
 CRITICAL - INLINE CITATIONS:
 - Add [1], [2], or [3] immediately after each fact, quote, or claim from that article
@@ -986,11 +1089,10 @@ CRITICAL - INLINE CITATIONS:
 - Every paragraph should have multiple citations showing source of information
 
 FORMAT:
-- Write your answer in natural, readable paragraphs with inline citations
-- Do NOT repeat the question in your answer
-- Do NOT add a "Sources:", "References:", or "Bibliography:" section at the end
-- Citations are ONLY inline [1][2][3] within the text
-- End your answer after the final paragraph - no lists or summaries after
+- Write natural paragraphs with inline citations only.
+- Do NOT repeat the question.
+- Do NOT add headings such as "References", "Sources", or "Bibliography"—inline citations are sufficient.
+- End the answer immediately after the final paragraph (no trailing lists or sections).
 
 Your synthesized answer with inline citations (stop after final paragraph):"""
         
@@ -1019,8 +1121,8 @@ Your synthesized answer with inline citations (stop after final paragraph):"""
             # LLMs often add this despite instructions - we show sources separately
             import re
             # Match "References:", "Sources:", "Bibliography:" followed by citation list
-            pattern = r'\n\s*(References?|Sources?|Bibliography):?\s*\n\s*\[.*$'
-            answer = re.sub(pattern, '', answer, flags=re.DOTALL | re.IGNORECASE)
+            pattern = r'\n\s*\[?(References?|Sources?|Bibliography)\]?[:\-]?\s*(\n.*)?$'
+            answer = re.sub(pattern, '', answer, flags=re.DOTALL | re.IGNORECASE).rstrip()
             
         except Exception as e:
             print(f"  ⚠ Generation error: {e}")
