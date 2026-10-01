@@ -7,6 +7,7 @@ from typing import Dict, List, Optional
 import ollama
 
 from retrieval import ZimStore
+from retrieval.dense import DenseIndex
 
 from . import llm
 from .agent import TurnResult, WikiChat
@@ -178,6 +179,8 @@ def build_app(args):
     store = ZimStore(zim_path)
     index_note = "full-text index" if store.has_fulltext else "no full-text index, title search only"
     print(f"✓ Wikipedia ZIM: {zim_path.name} (dated {store.date or 'unknown'}, {index_note})")
+    if not args.no_dense:
+        attach_dense_index(store, args.dense_index, available)
     # kiwix-serve is optional here: it only makes source links clickable
     if kiwix.connect(not args.no_auto_start and find_kiwix_binary() is not None):
         print(f"✓ Wikipedia book: {kiwix.content_base}")
@@ -195,6 +198,23 @@ def build_app(args):
     app = WikiChat(store, model, kiwix=kiwix, max_rounds=args.max_rounds,
                    history_turns=args.history_turns, on_event=TerminalPrinter())
     return app, zim_path.name
+
+
+def attach_dense_index(store: ZimStore, directory: Optional[str], available) -> None:
+    """Use the dense index for this ZIM if one is built and its embedding model is pulled"""
+    index = DenseIndex.find(str(store.archive.uuid), directory)
+    if index is None:
+        if directory:
+            raise Exception(f"No finished dense index for {store.zim_path.name} in {directory}")
+        print("ℹ No dense index for this ZIM; full-text retrieval only (see docs/DENSE_INDEX.md)")
+        return
+    model = index.embedder.model
+    if not any(llm._canonical_model_name(m) == llm._canonical_model_name(model) for m in available):
+        print(f"⚠ Dense index found but {model} is not pulled (ollama pull {model}); full-text retrieval only")
+        return
+    store.attach_dense(index)
+    scope = 'introductions' if index.meta.get('scope') == 'leads' else 'all sections'
+    print(f"✓ Dense index: {len(index):,} passages ({scope}); hybrid retrieval")
 
 
 def parse_args(argv: Optional[List[str]] = None):
@@ -218,6 +238,11 @@ def parse_args(argv: Optional[List[str]] = None):
                         help='Retrieve once for the question and answer in one call (no tool loop, no history)')
     parser.add_argument('--retrieval', choices=['zim', 'kiwix'], default='zim',
                         help='zim: read the ZIM directly with libzim (default); kiwix: v1 pipeline over kiwix-serve')
+    parser.add_argument('--dense-index', type=str, default=None,
+                        help='Dense index directory (default: the one built for this ZIM, if any; '
+                             'see docs/DENSE_INDEX.md)')
+    parser.add_argument('--no-dense', action='store_true',
+                        help='Full-text retrieval only, even if a dense index exists')
     parser.add_argument('--selection-model', type=str, default=None,
                         help='Article selection model, --retrieval kiwix only (default: auto-detect)')
     parser.add_argument('--kiwix-url', type=str, default='http://localhost:8080',

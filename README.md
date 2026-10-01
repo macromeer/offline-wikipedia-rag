@@ -76,6 +76,8 @@ The interactive mode is a chat: follow-up questions ("and when was it founded?")
                          also used automatically for models without tool calling
 --retrieval zim|kiwix    zim (default): read the ZIM directly; kiwix: the v1 pipeline
                          over kiwix-serve HTTP, kept as a baseline for evaluation
+--dense-index DIR        dense index to use (default: the one built for this ZIM, if any)
+--no-dense               full-text retrieval only, even if a dense index exists
 --selection-model NAME   article selection model, --retrieval kiwix only
 --kiwix-url URL          Kiwix server for source links (default: http://localhost:8080)
 --no-auto-start          don't start kiwix-serve automatically
@@ -127,14 +129,16 @@ Without kiwix-serve the sources are listed as `Title > Section` only.
 
 ```
 Question → model calls search_wikipedia("...") → exact title lookups + ZIM full-text
-search (libzim) → sections → chunks → BM25 rank → numbered passages → model answers
-(or searches again, at most 2 rounds) → streamed answer with [n] citations
+search (libzim) [+ dense index, if built] → sections → chunks → BM25 rank (fused with
+dense rank) → numbered passages → model answers (or searches again, at most 2 rounds)
+→ streamed answer with [n] citations
 ```
 
 1. **Tool loop**: the model gets two tools, `search_wikipedia(query)` and `read_section(title, section)`. It has to search before answering: if it answers from memory, that answer is dropped, a search for the question is run for it, and it is asked again (models skip the search surprisingly often; Qwen 3.6 almost always does). After two rounds of tool calls it must answer.
 2. **Find articles**: word spans of the query are looked up as exact titles (redirects followed, so "capital of australia" finds *Canberra*; disambiguation pages such as *ETF* are resolved to the listed article the full-text search agrees with). The ZIM's built-in Xapian index supplies further candidates.
 3. **Split**: each candidate article is split into its lead and sections (infoboxes, navboxes, references and citation markers removed) and packed into chunks of up to ~1,200 tokens, each prefixed with `Title > Section`.
 4. **Rank**: chunks are scored with BM25 using whole-Wikipedia term statistics, fused with the article's rank; the lead of every exact title match is always included. The top 8-12 go back to the model, numbered.
+   - **Optional dense index**: if you have built one ([docs/DENSE_INDEX.md](docs/DENSE_INDEX.md)), the query is also embedded and the 30 most similar passages in all of Wikipedia are fused in, so passages that answer the question in other words can be found. Building it embeds every passage once on the GPU (hours to a day for the full English dump).
 5. **Answer**: streamed to the terminal with inline `[n]` citations. Numbers stay the same for the whole conversation. Under the answer, the cited passages are listed, and any `[n]` that matches no retrieved passage is flagged.
 6. **History**: the last 4 questions and answers are kept, plus the titles of the passages they cited; passage text is not carried over, so a follow-up searches again.
 
@@ -148,7 +152,7 @@ uv run pytest                           # also integration tests on ZIMs found o
 uv run pytest tests/ --cov=. --cov-report=html
 ```
 
-Unit tests cover section parsing and chunking (on fixture pages in `tests/fixtures/`), title matching and ranking, the tool loop against a scripted Ollama (forced search, round cap, streaming, history, citation checks), the tools, search-term extraction, model detection, ZIM discovery and context sizing. Integration tests run against `~/wikipedia-dev/wikipedia_en_100_2026-08.zim` (override with `WIKI_DEV_ZIM`) and the full English ZIM if present (the chat tests also need Ollama; pick the model with `WIKI_TEST_MODEL`); they skip otherwise. CI runs the unit tests on Python 3.10-3.12 for every PR.
+Unit tests cover section parsing and chunking (on fixture pages in `tests/fixtures/`), title matching and ranking, the dense index (keys, quantisation, shards to search graph, hybrid fusion), the tool loop against a scripted Ollama (forced search, round cap, streaming, history, citation checks), the tools, search-term extraction, model detection, ZIM discovery and context sizing. Integration tests run against `~/wikipedia-dev/wikipedia_en_100_2026-08.zim` (override with `WIKI_DEV_ZIM`) and the full English ZIM if present (the chat tests also need Ollama; pick the model with `WIKI_TEST_MODEL`); they skip otherwise. CI runs the unit tests on Python 3.10-3.12 for every PR.
 
 ## Project Layout
 
@@ -164,7 +168,10 @@ offline-wikipedia-rag/
 │   ├── oneshot.py                      # --no-tools path and the v1 kiwix pipeline
 │   ├── kiwix.py / zimfiles.py          # kiwix-serve links, ZIM discovery
 │   └── questions.py                    # question complexity → passage count
-├── retrieval/zim_store.py              # libzim search, section parsing, chunking, BM25
+├── retrieval/
+│   ├── zim_store.py                    # libzim search, section parsing, chunking, BM25, fusion
+│   ├── dense.py                        # optional dense index: query embedding, vector search
+│   └── build_dense.py                  # builds the dense index (python -m retrieval.build_dense)
 ├── run.sh                              # launcher (uv run)
 ├── pyproject.toml / uv.lock            # Python dependencies
 ├── scripts/

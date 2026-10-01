@@ -16,7 +16,10 @@ class FakeStore(ZimStore):
         self._fulltext = fulltext          # list of paths
         self._dfs = dfs or {}
         self.has_fulltext = True
-        self.archive = SimpleNamespace(article_count=1000)
+        self.chunk_tokens = 1200
+        paths = list(articles)      # entry index = position in the dict
+        self.archive = SimpleNamespace(article_count=1000, uuid='fake-uuid', all_entry_count=len(paths),
+                                       _get_entry_by_id=lambda i: SimpleNamespace(path=paths[i]))
 
     def suggest_titles(self, text, k=10):
         return []
@@ -36,6 +39,10 @@ class FakeStore(ZimStore):
     def get_article(self, path):
         title, secs, disambig, links = self._articles[path]
         return Article(path, title, chunk_sections(secs, path), disambig, links)
+
+    def iter_articles(self, start, stop):
+        for index in range(start, min(stop, self.archive.all_entry_count)):
+            yield index, self.get_article(self.archive._get_entry_by_id(index).path)
 
     def _fulltext_candidates(self, terms, k):
         return [(p, self._articles[p][0]) for p in self._fulltext]

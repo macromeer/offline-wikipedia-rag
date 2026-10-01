@@ -2,8 +2,9 @@
 Retrieval straight from a Wikipedia ZIM file with python-libzim.
 
 Articles are found with the ZIM's Xapian full-text index plus exact title
-lookups, split into sections, chunked, and the chunks are ranked with BM25
-against the question. No kiwix-serve and no network access are needed.
+lookups (and, when a dense index is attached, by embedding similarity), split
+into sections, chunked, and the chunks are ranked with BM25 against the
+question. No kiwix-serve and no network access are needed.
 """
 
 import json
@@ -16,7 +17,7 @@ from collections import Counter, OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 from urllib.parse import unquote
 
 import lxml.html
@@ -107,7 +108,7 @@ class Chunk:
 class ScoredChunk:
     chunk: Chunk
     score: float
-    reason: str = 'bm25'            # 'bm25' or 'title' (forced lead of an exact title hit)
+    reason: str = 'bm25'            # 'bm25', 'dense' (no query term, found by embedding) or 'title' (forced lead)
 
 
 @dataclass(frozen=True)
@@ -124,6 +125,7 @@ class RetrievalResult:
     title_hits: List[Tuple[str, str]]       # (path, title) of exact title matches
     candidates: List[Tuple[str, str]]       # (path, title) of articles whose chunks were scored
     timings: Dict[str, float] = field(default_factory=dict)
+    dense: List[str] = field(default_factory=list)  # chunk ids from the dense index, best first
 
 
 # ---------------------------------------------------------------- text helpers
@@ -456,6 +458,9 @@ class Article:
 class ZimStore:
     """Read-only access to one Wikipedia ZIM: search, title lookup, sections, chunks."""
 
+    dense = None                    # retrieval.dense.DenseIndex, see attach_dense()
+    dense_k = 30                    # chunks taken from the dense index per query
+
     def __init__(self, zim_path, chunk_tokens: int = DEFAULT_CHUNK_TOKENS, cache_size: int = 256,
                  cache_dir: Optional[Path] = None):
         """
@@ -619,6 +624,51 @@ class ZimStore:
             self._cache.popitem(last=False)
         return article
 
+    def iter_articles(self, start: int, stop: int) -> Iterator[Tuple[int, Article]]:
+        """
+        (entry index, Article) for every HTML entry with index in [start, stop)
+        that is not a redirect or the main page. Bypasses the article cache.
+        """
+        for index in range(start, min(stop, self.archive.all_entry_count)):
+            entry = self.archive._get_entry_by_id(index)
+            if entry.is_redirect or entry.path == self._main_path:
+                continue
+            item = entry.get_item()
+            if not item.mimetype.startswith('text/html'):
+                continue
+            html = bytes(item.content).decode('utf-8', 'replace')
+            sections = article_to_sections(html, entry.title)
+            yield index, Article(entry.path, entry.title, chunk_sections(sections, entry.path, self.chunk_tokens),
+                                 is_disambiguation(sections, entry.title, html))
+
+    def attach_dense(self, index) -> None:
+        """Use a DenseIndex in retrieve(). Its chunk size must match this store's."""
+        if index.meta.get('zim_uuid') != str(self.archive.uuid):
+            raise ValueError(f"Dense index {index.directory} was built for another ZIM")
+        if index.chunk_tokens != self.chunk_tokens:
+            raise ValueError(f"Dense index {index.directory} uses {index.chunk_tokens}-token chunks, "
+                             f"this store {self.chunk_tokens}")
+        self.dense = index
+
+    def _dense_chunks(self, hits) -> List[Chunk]:
+        """Chunks for dense hits, in order; hits whose text no longer matches the checksum are dropped"""
+        from .dense import text_check
+        chunks, stale = [], 0
+        for hit in hits:
+            try:
+                path = self.archive._get_entry_by_id(hit.entry_index).path
+                chunk = self.get_article(path).chunks[hit.ordinal]
+            except (KeyError, IndexError, RuntimeError):
+                chunk = None
+            if chunk is None or text_check(chunk.text) != hit.check:
+                stale += 1
+                continue
+            chunks.append(chunk)
+        if hits and stale > len(hits) // 2 and not getattr(self, '_warned_stale', False):
+            self._warned_stale = True
+            print(f"⚠ {stale} of {len(hits)} dense hits do not match the current chunker; rebuild the dense index")
+        return chunks
+
     def get_chunk(self, chunk_id: str) -> Optional[Chunk]:
         path, _, ordinal = chunk_id.rpartition('#')
         try:
@@ -702,17 +752,19 @@ class ZimStore:
         Top-k chunks for a question.
 
         Articles: exact title hits first (a disambiguation hit is replaced by the
-        pages it lists, preferring those the full-text search also found), then
-        full-text candidates. Chunks are ranked by BM25 with whole-ZIM IDF, fused
-        by RRF with their article's rank. The lead of every exact title hit is
-        always included; at most per_article chunks come from one article
-        (twice that for title hits).
+        pages it lists, preferring those the search also found), then search
+        candidates: full-text, fused by RRF with the articles of the dense hits
+        when a dense index is attached. Chunks are ranked by RRF over BM25 with
+        whole-ZIM IDF, their article's rank, title-hit membership and dense
+        rank. The lead of every exact title hit is always included; at most
+        per_article chunks come from one article (twice that for title hits).
         """
         timings = {}
         t0 = time.perf_counter()
         terms = query_terms(question)
-        df_lookup = ThreadPoolExecutor(max_workers=1)
-        df_future = df_lookup.submit(self.document_frequencies, terms)  # slowest step; overlap it
+        background = ThreadPoolExecutor(max_workers=2)
+        df_future = background.submit(self.document_frequencies, terms)  # slowest step; overlap it
+        dense_future = background.submit(self._timed_dense_search, question) if self.dense else None
         hits = self.find_title_hits(question)
         timings['titles'] = time.perf_counter() - t0
 
@@ -723,11 +775,22 @@ class ZimStore:
             fulltext = [hit for term in terms for hit in self.suggest_titles(term, 5)]
         timings['search'] = time.perf_counter() - t1
 
+        dense: List[Chunk] = []
+        if dense_future:
+            dense_hits, timings['dense'] = dense_future.result()
+            t = time.perf_counter()
+            dense = self._dense_chunks(dense_hits)    # parses articles; not thread-safe, so here
+            timings['dense'] += time.perf_counter() - t
+        dense_paths = list(OrderedDict.fromkeys(c.path for c in dense))
+        searched = [p for p, _ in fulltext]
+        if dense_paths:
+            searched = reciprocal_rank_fusion([searched, dense_paths])
+
         t2 = time.perf_counter()
-        fulltext_paths = {path for path, _ in fulltext}
-        # weak hits the full-text search agrees with ("earthquakes" in "How do
-        # earthquakes cause tsunamis?") count as strong; the rest are candidates
-        title_hits = [h for h in hits if h.strong or h.path in fulltext_paths]
+        found_paths = set(searched)
+        # weak hits the search agrees with ("earthquakes" in "How do earthquakes
+        # cause tsunamis?") count as strong; the rest are candidates
+        title_hits = [h for h in hits if h.strong or h.path in found_paths]
         weak = [h.path for h in hits if h not in title_hits]
         primary: List[Article] = []      # title hits (and disambiguation targets the search agrees with)
         secondary: List[str] = []        # other disambiguation targets
@@ -741,14 +804,14 @@ class ZimStore:
                     resolved = self._entry(target).path
                 except KeyError:
                     continue
-                if resolved in fulltext_paths:
+                if resolved in found_paths:
                     primary.append(self.get_article(resolved))
                 else:
                     secondary.append(resolved)
 
         ordered: 'OrderedDict[str, Article]' = OrderedDict((a.path, a) for a in primary)
         budget = max_articles + len(ordered)
-        for path in [p for p, _ in fulltext[:max_articles // 2]] + weak + secondary[:6] + [p for p, _ in fulltext]:
+        for path in searched[:max_articles // 2] + weak + secondary[:6] + searched:
             if len(ordered) >= budget:
                 break
             if path in ordered:
@@ -763,21 +826,32 @@ class ZimStore:
 
         t3 = time.perf_counter()
         pool = [(rank, chunk) for rank, article in enumerate(ordered.values()) for chunk in article.chunks]
+        # dense hits from articles outside the candidate budget join on their own, ranked last as articles
+        in_pool = {chunk.chunk_id for _, chunk in pool}
+        pool += [(len(ordered), chunk) for chunk in dense if chunk.chunk_id not in in_pool]
+        dense_rank = {chunk.chunk_id: r for r, chunk in enumerate(dense)}
         corpus = [tokenize(chunk.text) for _, chunk in pool]
         dfs = df_future.result()
-        df_lookup.shutdown()
+        background.shutdown()
         idf = self._idf(terms, dfs, corpus)
         bm25 = BM25(corpus)
         bm25.idf = idf
         scores = bm25.scores(list(idf)) if pool else []
         by_bm25 = sorted(range(len(pool)), key=lambda i: -scores[i])
         bm25_rank = {i: r for r, i in enumerate(by_bm25)}
-        # RRF over three signals: chunk BM25 rank, article rank, and membership in
-        # the title hits (the question names that article, so its sections lead)
+        # RRF over four signals: chunk BM25 rank, article rank, membership in the
+        # title hits (the question names that article, so its sections lead), and
+        # dense rank. A chunk needs a query term or a dense hit to be eligible.
         primary_paths = {a.path for a in primary}
-        fused = {i: 1.0 / (60 + bm25_rank[i] + 1) + 1.0 / (60 + pool[i][0] + 1)
-                 + (1.0 / 61 if pool[i][1].path in primary_paths else 0.0)
-                 for i in range(len(pool)) if scores[i] > 0}
+        fused = {}
+        for i, (article_rank, chunk) in enumerate(pool):
+            d = dense_rank.get(chunk.chunk_id)
+            if scores[i] <= 0 and d is None:
+                continue
+            fused[i] = ((1.0 / (60 + bm25_rank[i] + 1) if scores[i] > 0 else 0.0)
+                        + 1.0 / (60 + article_rank + 1)
+                        + (1.0 / 61 if chunk.path in primary_paths else 0.0)
+                        + (1.0 / (60 + d + 1) if d is not None else 0.0))
 
         selected: List[ScoredChunk] = []
         per_path: Counter = Counter()
@@ -794,7 +868,7 @@ class ZimStore:
             cap = per_article * 2 if chunk.path in primary_paths else per_article
             if chunk.chunk_id in chosen or per_path[chunk.path] >= cap:
                 continue
-            selected.append(ScoredChunk(chunk, scores[i]))
+            selected.append(ScoredChunk(chunk, scores[i], 'bm25' if scores[i] > 0 else 'dense'))
             per_path[chunk.path] += 1
             chosen.add(chunk.chunk_id)
         for sc in selected:
@@ -803,4 +877,10 @@ class ZimStore:
         timings['rank'] = time.perf_counter() - t3
         timings['total'] = time.perf_counter() - t0
         return RetrievalResult(selected, [(h.path, h.title) for h in title_hits],
-                               [(a.path, a.title) for a in ordered.values()], timings)
+                               [(a.path, a.title) for a in ordered.values()], timings,
+                               [c.chunk_id for c in dense])
+
+    def _timed_dense_search(self, question: str):
+        """(hits, seconds); runs in a worker thread, so it only embeds and searches the graph"""
+        t = time.perf_counter()
+        return self.dense.search(question, self.dense_k), time.perf_counter() - t
