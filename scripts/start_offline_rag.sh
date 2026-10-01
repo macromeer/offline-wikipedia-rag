@@ -18,8 +18,8 @@ if [ ! -x "$KIWIX_SERVE" ]; then
     exit 1
 fi
 
-ZIM="$(uv run --quiet --project "$REPO_DIR" python -c \
-    'from wikipedia_rag_kiwix import resolve_zim_path; print(resolve_zim_path() or "")')"
+ZIM="$(PYTHONPATH="$REPO_DIR" uv run --quiet --project "$REPO_DIR" python -c \
+    'from wikirag.zimfiles import resolve_zim_path; print(resolve_zim_path() or "")')"
 if [ -z "$ZIM" ]; then
     echo "❌ No complete Wikipedia ZIM found. Run scripts/setup_full_offline_wikipedia.sh"
     exit 1

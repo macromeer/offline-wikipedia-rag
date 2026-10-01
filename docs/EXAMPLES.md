@@ -176,17 +176,20 @@ done
 Use as a module:
 
 ```python
-from wikipedia_rag_kiwix import KiwixWikipediaRAG
+from retrieval import ZimStore
+from wikirag import WikiChat, resolve_zim_path
 
-# Initialize
-rag = KiwixWikipediaRAG(model_name='deepseek-r1:latest')
+chat = WikiChat(ZimStore(resolve_zim_path()), model='gemma4:26b')
 
-# Ask question
-result = rag.query_with_rag("What is Python programming?")
+result = chat.ask("What is Python programming?")
+print(result.answer)
+print("Sources:", [c.label for c in result.citations])
 
-print(result['answer'])
-print("Sources:", [s['title'] for s in result['sources']])
+# follow-ups use the conversation
+print(chat.ask("Who created it?").answer)
 ```
+
+`WikiChat(..., on_event=callback)` receives the tool calls and answer text as they happen (see `wikirag/cli.py` for a printer).
 
 ## Tips for Best Results
 

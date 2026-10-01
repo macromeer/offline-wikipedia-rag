@@ -42,8 +42,8 @@ Already have Ollama, [uv](https://docs.astral.sh/uv/) and a Wikipedia ZIM? Just 
 ```bash
 # 1. Ollama and models (any instruction model ≥4B works; see "Models" below)
 curl -fsSL https://ollama.com/install.sh | sh
-ollama pull mistral:7b          # selection (only for --retrieval kiwix)
-ollama pull llama3.1:8b         # synthesis
+ollama pull qwen3:8b            # answer model; must support tool calling
+ollama pull mistral:7b          # article selection, only for --retrieval kiwix
 
 # 2. Python environment
 uv sync
@@ -59,20 +59,24 @@ uv sync
 ## Usage
 
 ```bash
-./run.sh                                         # interactive
+./run.sh                                         # interactive chat
 ./run.sh --question "What is machine learning?"  # single question
 ```
 
-Each question is answered on its own; the interactive mode does not keep chat history yet.
+The interactive mode is a chat: follow-up questions ("and when was it founded?") use the last few questions and answers. Type `/reset` to start a new conversation and `quit` to exit.
 
 ```
 --zim PATH               ZIM file (default: $WIKI_ZIM, else newest complete *.zim
                          in ~/wikipedia-offline, ~/Downloads, /data/wikipedia, /var/lib/kiwix)
---model NAME             synthesis model (default: auto-detect)
---selection-model NAME   article selection model, --retrieval kiwix only
---max-results N          passages to retrieve (default: 8-12 by question complexity)
+--model NAME             answer model (default: auto-detect)
+--max-results N          passages per search (default: 8-12 by question complexity)
+--max-rounds N           rounds of searches before the model must answer (default: 2)
+--history-turns N        earlier turns kept for follow-ups (default: 4; 0 disables)
+--no-tools               retrieve once and answer in one call (no tool loop, no history);
+                         also used automatically for models without tool calling
 --retrieval zim|kiwix    zim (default): read the ZIM directly; kiwix: the v1 pipeline
                          over kiwix-serve HTTP, kept as a baseline for evaluation
+--selection-model NAME   article selection model, --retrieval kiwix only
 --kiwix-url URL          Kiwix server for source links (default: http://localhost:8080)
 --no-auto-start          don't start kiwix-serve automatically
 ```
@@ -81,34 +85,40 @@ Partially downloaded ZIM files are detected from their header and skipped, so yo
 
 ### Models
 
-Auto-detection prefers, in order, Qwen 3.6/3.5, Gemma 4 and Qwen 3 families, then Qwen 2.5, Mistral, Hermes 3 and Llama 3.1 (synthesis prefers Gemma 4 first). It never auto-selects coder, embedding, reranker or reasoning (`r1`, DeepSeek) models, nor models under 4B parameters unless nothing else is installed. Override with `--model` / `--selection-model`.
+The answer model is auto-detected in this order: Gemma 4, Qwen 3.6/3.5, Qwen 3, then Llama 3.1, Gemma 2, Mistral and others. It never auto-selects coder, embedding, reranker or reasoning (`r1`, DeepSeek) models, nor models under 4B parameters unless nothing else is installed. Override with `--model`.
+
+The chat needs a model with tool calling (`ollama show MODEL` lists `tools` under Capabilities; Gemma 4, Qwen 3.x and Llama 3.1 have it). With a model that lacks it, each question is retrieved once and answered without the tool loop or history.
+
+The v1 pipeline (`--retrieval kiwix`) also uses a selection model, auto-detected in the order Qwen 3.6/3.5, Gemma 4, Qwen 3, Qwen 2.5, Mistral, Hermes 3, Llama 3.1; override with `--selection-model`.
 
 ### Example
 
 ```
 ✓ Wikipedia ZIM: wikipedia_en_all_nopic_2026-06.zim (dated 2026-06-17, full-text index)
 ✓ Kiwix server started at http://localhost:8080
-✓ Summarization model: gemma4:26b
+✓ Model: gemma4:26b (searches with tools, up to 2 round(s))
 
-🔍 Searching local Wikipedia for: What are the goals of NASA?
-  🎯 Title matches: NASA
-✓ Retrieved 8 passage(s) from 3 article(s) in 0.32s (14 articles scored)
-  📄 NASA
-  📄 NASA > Management > Strategic plan
-  ...
-🤖 Generating synthesis with gemma4:26b...
-  📏 Synthesis: 2867 prompt tokens (num_ctx 16384)
-⏱️  Total time: 9.6s
+❓ Your question: What is the capital of Australia?
+  🔎 search "capital of Australia" → 8 passage(s), 8 new
 
 📖 Answer:
-   NASA's primary goals involve expanding human knowledge, advancing space
-   exploration, and driving technological and economic innovation [2]. ...
-
+   The capital city of Australia is Canberra [1].
+   ...
 📚 Sources (click to open):
-   [1] NASA
-       http://localhost:8080/content/wikipedia_en_all_nopic_2026-06/NASA
-   [2] NASA > Management > Strategic plan
-       http://localhost:8080/content/wikipedia_en_all_nopic_2026-06/NASA#Strategic_plan
+   [1] Canberra
+       http://localhost:8080/content/wikipedia_en_all_nopic_2026-06/Canberra
+⏱️  3.5s, first answer text after 2.2s; 1 tool call(s), 8 passage(s) shown, largest prompt 5920 tokens
+
+❓ Your question: How many people live there?
+  🔎 search "Canberra population" → 8 passage(s), 7 new
+
+📖 Answer:
+   At the 2021 census, Canberra had 452,670 residents [6][11][13]. ...
+📚 Sources (click to open):
+   [6] Canberra > Demographics
+       http://localhost:8080/content/wikipedia_en_all_nopic_2026-06/Canberra#Demographics
+   ...
+⏱️  5.6s, first answer text after 3.8s; 1 tool call(s), 8 passage(s) shown, largest prompt 3403 tokens
 ```
 
 Without kiwix-serve the sources are listed as `Title > Section` only.
@@ -116,17 +126,19 @@ Without kiwix-serve the sources are listed as `Title > Section` only.
 ## How It Works
 
 ```
-Question → exact title lookups + ZIM full-text search (libzim) → parse candidate
-articles into sections → chunk → BM25 rank → synthesis model → answer with
-section-level citations
+Question → model calls search_wikipedia("...") → exact title lookups + ZIM full-text
+search (libzim) → sections → chunks → BM25 rank → numbered passages → model answers
+(or searches again, at most 2 rounds) → streamed answer with [n] citations
 ```
 
-1. **Find articles**: word spans of the question are looked up as exact titles (redirects followed, so "capital of australia" finds *Canberra*; disambiguation pages such as *ETF* are resolved to the listed article the full-text search agrees with). The ZIM's built-in Xapian index supplies further candidates.
-2. **Split**: each candidate article is split into its lead and sections (infoboxes, navboxes, references and citation markers removed) and packed into chunks of up to ~1,200 tokens, each prefixed with `Title > Section`.
-3. **Rank**: chunks are scored with BM25 using whole-Wikipedia term statistics, fused with the article's rank; the lead of every exact title match is always included.
-4. **Synthesis**: the synthesis model answers from the top 8-12 passages with inline `[1][2]` citations.
+1. **Tool loop**: the model gets two tools, `search_wikipedia(query)` and `read_section(title, section)`. It has to search before answering: if it answers from memory, that answer is dropped, a search for the question is run for it, and it is asked again (models skip the search surprisingly often; Qwen 3.6 almost always does). After two rounds of tool calls it must answer.
+2. **Find articles**: word spans of the query are looked up as exact titles (redirects followed, so "capital of australia" finds *Canberra*; disambiguation pages such as *ETF* are resolved to the listed article the full-text search agrees with). The ZIM's built-in Xapian index supplies further candidates.
+3. **Split**: each candidate article is split into its lead and sections (infoboxes, navboxes, references and citation markers removed) and packed into chunks of up to ~1,200 tokens, each prefixed with `Title > Section`.
+4. **Rank**: chunks are scored with BM25 using whole-Wikipedia term statistics, fused with the article's rank; the lead of every exact title match is always included. The top 8-12 go back to the model, numbered.
+5. **Answer**: streamed to the terminal with inline `[n]` citations. Numbers stay the same for the whole conversation. Under the answer, the cited passages are listed, and any `[n]` that matches no retrieved passage is flagged.
+6. **History**: the last 4 questions and answers are kept, plus the titles of the passages they cited; passage text is not carried over, so a follow-up searches again.
 
-Retrieval needs no server and typically takes 0.1-0.6 s on the full English dump; a question with very common words can take 1-2 s the first time, until their term statistics are cached in `~/.cache/offline-wikipedia-rag/`. The code lives in [retrieval/zim_store.py](retrieval/zim_store.py). The v1 pipeline (kiwix-serve search, LLM article selection over abstracts) is still available with `--retrieval kiwix`; see [docs/TWO_STAGE_AI_PIPELINE.md](docs/TWO_STAGE_AI_PIPELINE.md) and [docs/AUTOMATIC_SETUP.md](docs/AUTOMATIC_SETUP.md).
+Retrieval needs no server and typically takes 0.1-0.6 s on the full English dump; a question with very common words can take 1-2 s the first time, until their term statistics are cached in `~/.cache/offline-wikipedia-rag/`. On the dev box (RTX PRO 4000, `gemma4:26b`), 11 test questions took 3.5-7.5 s end to end for simple ones, with the first answer text after 2-6 s, and 9-13 s for explanations and comparisons; `qwen3.6:35b` took 2-6 s for the same questions. The v1 pipeline (kiwix-serve search, LLM article selection over abstracts) is still available with `--retrieval kiwix`; see [docs/TWO_STAGE_AI_PIPELINE.md](docs/TWO_STAGE_AI_PIPELINE.md) and [docs/AUTOMATIC_SETUP.md](docs/AUTOMATIC_SETUP.md).
 
 ## Testing
 
@@ -136,13 +148,22 @@ uv run pytest                           # also integration tests on ZIMs found o
 uv run pytest tests/ --cov=. --cov-report=html
 ```
 
-Unit tests cover section parsing and chunking (on fixture pages in `tests/fixtures/`), title matching and ranking, search-term extraction, model detection, ZIM discovery and context sizing. Integration tests run against `~/wikipedia-dev/wikipedia_en_100_2026-08.zim` (override with `WIKI_DEV_ZIM`) and the full English ZIM if present; they skip otherwise. CI runs the unit tests on Python 3.10-3.12 for every PR.
+Unit tests cover section parsing and chunking (on fixture pages in `tests/fixtures/`), title matching and ranking, the tool loop against a scripted Ollama (forced search, round cap, streaming, history, citation checks), the tools, search-term extraction, model detection, ZIM discovery and context sizing. Integration tests run against `~/wikipedia-dev/wikipedia_en_100_2026-08.zim` (override with `WIKI_DEV_ZIM`) and the full English ZIM if present (the chat tests also need Ollama; pick the model with `WIKI_TEST_MODEL`); they skip otherwise. CI runs the unit tests on Python 3.10-3.12 for every PR.
 
 ## Project Layout
 
 ```
 offline-wikipedia-rag/
-├── wikipedia_rag_kiwix.py              # main application
+├── wikipedia_rag_kiwix.py              # entry point (run.sh calls it)
+├── wikirag/
+│   ├── cli.py                          # arguments, terminal chat, output
+│   ├── agent.py                        # tool loop, streaming, chat history
+│   ├── tools.py                        # search_wikipedia / read_section
+│   ├── citations.py                    # citation table and [n] checks
+│   ├── llm.py                          # Ollama model detection and calls
+│   ├── oneshot.py                      # --no-tools path and the v1 kiwix pipeline
+│   ├── kiwix.py / zimfiles.py          # kiwix-serve links, ZIM discovery
+│   └── questions.py                    # question complexity → passage count
 ├── retrieval/zim_store.py              # libzim search, section parsing, chunking, BM25
 ├── run.sh                              # launcher (uv run)
 ├── pyproject.toml / uv.lock            # Python dependencies

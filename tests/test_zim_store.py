@@ -3,17 +3,17 @@
 import os
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from retrieval import (
-    BM25, Article, Section, ZimStore, article_to_sections, chunk_sections,
+    BM25, Section, ZimStore, article_to_sections, chunk_sections,
     disambiguation_links, is_disambiguation, query_terms, title_spans, tokenize,
 )
 from retrieval.zim_store import TitleHit, reciprocal_rank_fusion
+from tests.fakes import FakeStore, _article
 
 FIXTURES = Path(__file__).parent / 'fixtures'
 
@@ -187,45 +187,6 @@ class TestRanking:
         assert reciprocal_rank_fusion([['a', 'b', 'c'], ['b', 'a'], ['b']]) == ['b', 'a', 'c']
 
 
-class FakeStore(ZimStore):
-    """ZimStore over in-memory articles: {path: (title, [Section...], is_disambiguation, links)}"""
-
-    def __init__(self, articles, titles, fulltext, dfs=None):
-        self._articles = articles
-        self._titles = titles              # typed title -> path
-        self._fulltext = fulltext          # list of paths
-        self._dfs = dfs or {}
-        self.has_fulltext = True
-        self.archive = SimpleNamespace(article_count=1000)
-
-    def lookup_title(self, text):
-        for variant in (text, text[0].upper() + text[1:], text.title()):
-            if variant in self._titles:
-                path = self._titles[variant]
-                return path, self._articles[path][0]
-        return None
-
-    def _entry(self, path):
-        if path not in self._articles:
-            raise KeyError(path)
-        return SimpleNamespace(path=path)
-
-    def get_article(self, path):
-        title, secs, disambig, links = self._articles[path]
-        return Article(path, title, chunk_sections(secs, path), disambig, links)
-
-    def _fulltext_candidates(self, terms, k):
-        return [(p, self._articles[p][0]) for p in self._fulltext]
-
-    def document_frequencies(self, terms):
-        return {t.lower(): self._dfs.get(t.lower(), 10) for t in terms}
-
-
-def _article(title, *sections, disambig=False, links=()):
-    secs = [Section(title, tuple(h for h in heading.split(' > ') if h), text) for heading, text in sections]
-    return (title, secs, disambig, list(links))
-
-
 class TestTitleHits:
     @pytest.fixture
     def store(self):
@@ -316,7 +277,7 @@ DEV_ZIM = Path(os.environ.get('WIKI_DEV_ZIM', Path.home() / 'wikipedia-dev' / 'w
 
 
 def _full_zim():
-    from wikipedia_rag_kiwix import resolve_zim_path
+    from wikirag.zimfiles import resolve_zim_path
     try:
         path = resolve_zim_path()
     except (FileNotFoundError, ValueError):
@@ -329,7 +290,8 @@ class TestDevZim:
     """Small ZIM (top-100 articles, has a full-text index); set WIKI_DEV_ZIM to override"""
 
     @pytest.fixture(scope='class')
-    def store(self, tmp_path_factory):
+    @classmethod
+    def store(cls, tmp_path_factory):
         if not DEV_ZIM.is_file():
             pytest.skip(f'dev ZIM not found: {DEV_ZIM}')
         return ZimStore(DEV_ZIM, cache_dir=tmp_path_factory.mktemp('cache'))
@@ -357,7 +319,8 @@ class TestFullZim:
     """Full English Wikipedia (WIKI_ZIM or auto-discovered *_all_*.zim)"""
 
     @pytest.fixture(scope='class')
-    def store(self):
+    @classmethod
+    def store(cls):
         path = _full_zim()
         if not path:
             pytest.skip('no full English Wikipedia ZIM found')
