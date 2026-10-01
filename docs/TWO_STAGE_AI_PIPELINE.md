@@ -33,7 +33,7 @@ ollama pull qwen2.5:14b-instruct
 ollama pull llama3.1:8b-instruct
 
 # Run
-python wikipedia_rag_kiwix.py \
+./run.sh \
   --selection-model qwen2.5:14b-instruct \
   --model llama3.1:8b-instruct
 ```
@@ -46,7 +46,7 @@ ollama pull qwen2.5:32b-instruct
 ollama pull gemma2:27b
 
 # Run
-python wikipedia_rag_kiwix.py \
+./run.sh \
   --selection-model qwen2.5:32b-instruct \
   --model gemma2:27b
 ```
@@ -60,7 +60,7 @@ ollama pull qwen2.5:32b-instruct
 ollama pull llama3.1:70b-instruct
 
 # Run
-python wikipedia_rag_kiwix.py \
+./run.sh \
   --selection-model qwen2.5:32b-instruct \
   --model llama3.1:70b-instruct
 ```
@@ -74,7 +74,7 @@ ollama pull hermes3:8b
 ollama pull gemma2:9b
 
 # Run
-python wikipedia_rag_kiwix.py \
+./run.sh \
   --selection-model hermes3:8b \
   --model gemma2:9b
 ```
@@ -84,7 +84,7 @@ python wikipedia_rag_kiwix.py \
 # Mistral-Small: Best balance for both tasks (2-3x faster)
 ollama pull mistral-small:latest
 
-python wikipedia_rag_kiwix.py --model mistral-small:latest
+./run.sh --model mistral-small:latest
 ```
 
 ## Model Performance Comparison
@@ -104,13 +104,13 @@ python wikipedia_rag_kiwix.py --model mistral-small:latest
 ### Auto-Detection (Recommended)
 The system automatically detects the best available models:
 ```bash
-python wikipedia_rag_kiwix.py
+./run.sh
 ```
 
 ### Manual Configuration
 Specify both models explicitly:
 ```bash
-python wikipedia_rag_kiwix.py \
+./run.sh \
   --selection-model qwen2.5:32b-instruct \
   --model llama3.1:70b-instruct \
   --question "What causes earthquakes?"
@@ -240,19 +240,19 @@ ollama list | grep -E 'qwen|mistral|hermes'
 
 ### Interactive Mode
 ```bash
-python wikipedia_rag_kiwix.py
+./run.sh
 ```
 
 ### Single Question
 ```bash
-python wikipedia_rag_kiwix.py \
+./run.sh \
   --question "What is the relationship between plate tectonics and earthquakes?" \
   --max-results 5
 ```
 
 ### Custom Models
 ```bash
-python wikipedia_rag_kiwix.py \
+./run.sh \
   --selection-model qwen2.5:14b-instruct \
   --model gemma2:27b \
   --question "What causes volcanoes?"

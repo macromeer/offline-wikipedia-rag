@@ -2,139 +2,60 @@
 
 This guide sets up a **complete offline English Wikipedia** using Kiwix.
 
-## What You Get
+## Editions
 
-- ✅ **Complete English Wikipedia** (~95GB compressed, ~100GB+ uncompressed)
-- ✅ **Fully offline** - no internet needed after download
-- ✅ **Fast local access** via Kiwix server
-- ✅ **RAG integration** with your Ollama model (DeepSeek)
+Kiwix publishes English Wikipedia as ZIM files at https://download.kiwix.org/zim/wikipedia/, refreshed every few months. File names carry the dump month (e.g. `wikipedia_en_all_nopic_2026-06.zim`) and old ones are removed from the mirror, so never hardcode a name.
+
+| Edition | Contents | Size (2026) |
+| --- | --- | --- |
+| `wikipedia_en_all_nopic` | all articles, no images | ~49 GB **(recommended)** |
+| `wikipedia_en_all_mini` | lead section + infobox only | ~13 GB |
+| `wikipedia_en_all_maxi` | all articles with images | ~119 GB |
+
+Images don't help the assistant, so `nopic` gives the same text as `maxi` for less than half the disk.
 
 ## Quick Setup
 
-### 1. Download & Install
-
-Run the automated setup:
 ```bash
-chmod +x setup_full_offline_wikipedia.sh
-./setup_full_offline_wikipedia.sh
+./scripts/setup_full_offline_wikipedia.sh                  # asks which edition (default nopic)
+./scripts/setup_full_offline_wikipedia.sh --variant mini   # small-disk option
+./scripts/setup_full_offline_wikipedia.sh --dry-run        # just print the newest URL
 ```
 
-This will:
-- Install Kiwix tools
-- Download English Wikipedia ZIM file (~95GB, takes hours)
-- Place it in `~/wikipedia-offline/`
+The script:
+- installs `kiwix-serve` (latest kiwix-tools release) to `~/.local/bin/` if missing
+- lists the mirror and picks the newest file for the chosen edition
+- checks free disk space and downloads to `~/wikipedia-offline/` with `wget -c` (re-run to resume)
 
-**Alternative - Manual Download:**
+Set `WIKI_DIR` to download somewhere else.
 
-If you prefer to download manually:
-```bash
-mkdir -p ~/wikipedia-offline
-cd ~/wikipedia-offline
+**Manual download:** pick the newest `wikipedia_en_all_nopic_*.zim` from the mirror listing and `wget -c` it into `~/wikipedia-offline/`.
 
-# Download latest English Wikipedia (check https://wiki.kiwix.org/wiki/Content for latest)
-wget https://download.kiwix.org/zim/wikipedia/wikipedia_en_all_maxi_2024-01.zim
-```
-
-### 2. Start Kiwix Server
+## Use with the assistant
 
 ```bash
-# Start the server (runs in foreground)
-kiwix-serve ~/wikipedia-offline/*.zim
-
-# Or run in background
-kiwix-serve ~/wikipedia-offline/*.zim &
+./run.sh
 ```
 
-Server runs at: http://localhost:8080
+`run.sh` uses the newest **complete** ZIM in `~/wikipedia-offline/` (also `~/Downloads/`, `/data/wikipedia/`, `/var/lib/kiwix/`). A file that is still downloading is detected from its header and skipped. To choose a file explicitly:
 
-### 3. Test in Browser
-
-Open http://localhost:8080 in your browser to verify Wikipedia loads.
-
-### 4. Use with RAG
-
-**Activate environment:**
 ```bash
-mamba activate wikipedia-rag
+./run.sh --zim /path/to/wikipedia_en_all_nopic_2026-06.zim
+export WIKI_ZIM=/path/to/wikipedia_en_all_nopic_2026-06.zim   # same, via environment
 ```
 
-**Install additional dependencies:**
+## Browse Wikipedia
+
 ```bash
-pip install beautifulsoup4 requests
+./scripts/start_offline_rag.sh     # serves the same ZIM at http://localhost:8080
 ```
 
-**Run RAG system:**
+The assistant's own auto-started server listens on 127.0.0.1 only; `start_offline_rag.sh` listens on all interfaces so other devices on your network can browse.
+
+## Keeping Kiwix Running (systemd)
+
 ```bash
-# Interactive mode (auto-uses DeepSeek, excludes qwen)
-python wikipedia_rag_kiwix.py
-
-# Single question
-python wikipedia_rag_kiwix.py --question "What is quantum computing?"
-
-# Specify model explicitly
-python wikipedia_rag_kiwix.py --model deepseek-r1:latest --question "Explain AI"
-```
-
-## System Requirements
-
-- **Disk Space**: ~110GB (95GB download + extraction)
-- **RAM**: 4GB+ recommended
-- **Download Time**: 2-8 hours (depends on connection)
-- **Kiwix Server**: ~100MB RAM when running
-
-## Advantages
-
-✅ **100% Offline** - No internet needed after setup
-✅ **Complete Encyclopedia** - All English Wikipedia articles
-✅ **Fast Retrieval** - Local server, instant access
-✅ **No API Limits** - Unlimited queries
-✅ **Privacy** - All data stays local
-
-## File Structure
-
-```
-~/wikipedia-offline/
-  └── wikipedia_en_all_maxi_2024-01.zim  (~95GB)
-
-~/Documents/ollama-wikipedia-rag/
-  ├── wikipedia_rag_kiwix.py              (RAG with Kiwix)
-  ├── setup_full_offline_wikipedia.sh     (Setup script)
-  └── OFFLINE_SETUP.md                    (This file)
-```
-
-## Troubleshooting
-
-**Kiwix server not found:**
-```bash
-# Make sure ~/.local/bin is in PATH
-export PATH="$HOME/.local/bin:$PATH"
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-```
-
-**Connection refused:**
-```bash
-# Make sure Kiwix is running
-ps aux | grep kiwix-serve
-
-# Start it if not running
-kiwix-serve ~/wikipedia-offline/*.zim &
-```
-
-**Model issues:**
-```bash
-# List available models
-ollama list
-
-# The script automatically excludes qwen models
-# Use DeepSeek explicitly if needed
-python wikipedia_rag_kiwix.py --model deepseek-r1:latest
-```
-
-## Keeping Kiwix Running
-
-**Start automatically on boot (systemd):**
-```bash
-# Create service file
+mkdir -p ~/.config/systemd/user
 cat > ~/.config/systemd/user/kiwix.service <<EOF
 [Unit]
 Description=Kiwix Wikipedia Server
@@ -142,20 +63,29 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/home/$USER/.local/bin/kiwix-serve /home/$USER/wikipedia-offline/wikipedia_en_all_maxi_2024-01.zim
+ExecStart=$HOME/.local/bin/kiwix-serve --port=8080 $HOME/wikipedia-offline/wikipedia_en_all_nopic_2026-06.zim
 Restart=on-failure
 
 [Install]
 WantedBy=default.target
 EOF
 
-# Enable and start
-systemctl --user enable kiwix
-systemctl --user start kiwix
+systemctl --user enable --now kiwix
 ```
 
-## Notes
+Update the file name in `ExecStart` when you download a newer dump. With the service running, `./run.sh` connects to it instead of starting its own server.
 
-- Wikipedia ZIM files are updated monthly at https://download.kiwix.org/zim/wikipedia/
-- The `wikipedia_en_all_maxi` version includes all articles but no images
-- For images, use `wikipedia_en_all_nopic` (larger, ~90GB+)
+## System Requirements
+
+- **Disk**: ~50 GB for `nopic` (plus models)
+- **Kiwix server**: ~100 MB RAM
+- **Download time**: a few hours, depending on your connection
+
+## Troubleshooting
+
+**kiwix-serve not found:** the setup script installs it to `~/.local/bin/`. The assistant looks there automatically; for your shell, add it to `PATH`:
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+```
+
+**"Skipping incomplete ZIM":** the download hasn't finished. Re-run the setup script to resume it.

@@ -8,7 +8,8 @@ import ollama
 import requests
 from bs4 import BeautifulSoup
 import argparse
-from typing import List, Dict
+from typing import List, Dict, Optional
+from urllib.parse import quote
 import re
 import time
 import subprocess
@@ -55,6 +56,60 @@ def _normalize_for_match(text: str) -> str:
     tokens = re.findall(r"[a-z0-9]+", text.lower())
     return " ".join(tokens)
 
+
+# Model auto-detection. Entries without a tag match any tag of that family
+# (subject to the eligibility rules below); entries with a tag also match exactly.
+SELECTION_MODEL_PREFERENCES = [
+    'qwen3.6', 'qwen3.5', 'gemma4', 'qwen3',
+    'qwen2.5:32b-instruct', 'qwen2.5:32b', 'qwen2.5:14b-instruct', 'qwen2.5:14b', 'qwen2.5:7b-instruct',
+    'mistral-small', 'mistral:7b', 'hermes3:8b', 'hermes3', 'llama3.1:8b', 'phi3:medium',
+]
+SUMMARIZATION_MODEL_PREFERENCES = [
+    'gemma4', 'qwen3.6', 'qwen3.5', 'qwen3',
+    'llama3.1:8b-instruct', 'llama3.1:8b', 'gemma2:27b', 'gemma2:9b', 'mistral:7b',
+    'granite3.1-dense:8b', 'qwen2.5:7b', 'llama3.3:70b', 'llama3.1:70b-instruct', 'llama3.1:70b',
+]
+MIN_MODEL_PARAMS_B = 4.0
+EXCLUDED_MODEL_SUBSTRINGS = ('coder', 'embed', 'rerank', 'deepseek')
+EXCLUDED_MODEL_TOKENS = ('r1',)  # matched as a whole name component, e.g. 'foo-r1:7b'
+
+# Context window. Ollama's default (4096) silently truncates the synthesis prompt.
+# Rounded to powers of two so repeated calls reuse the loaded model instead of reloading.
+MIN_NUM_CTX = 16384
+CHARS_PER_TOKEN = 4  # rough estimate; consistency matters more than precision
+
+
+def _parse_param_billions(text: str) -> Optional[float]:
+    """Parse a parameter count like '26b', '1.5b', '751.63M', '8x7b' into billions"""
+    match = re.search(r'(?:(\d+)x)?(\d+(?:\.\d+)?)([bm])(?![a-z])', text.lower())
+    if not match:
+        return None
+    experts, value, unit = match.groups()
+    billions = float(value) * (int(experts) if experts else 1)
+    return billions / 1000 if unit == 'm' else billions
+
+
+def _is_excluded_model(name: str) -> bool:
+    lowered = name.lower()
+    if any(s in lowered for s in EXCLUDED_MODEL_SUBSTRINGS):
+        return True
+    components = re.split(r'[-_:./]', lowered)
+    return any(t in components for t in EXCLUDED_MODEL_TOKENS)
+
+
+def _canonical_model_name(name: str) -> str:
+    """'llama3.1' and 'llama3.1:latest' name the same model"""
+    return name if ':' in name else f"{name}:latest"
+
+
+def _num_ctx_for(prompt: str, num_predict: int) -> int:
+    """Smallest power-of-two context (>= MIN_NUM_CTX) that fits prompt + output"""
+    needed = len(prompt) // CHARS_PER_TOKEN + num_predict + 512
+    num_ctx = MIN_NUM_CTX
+    while num_ctx < needed:
+        num_ctx *= 2
+    return num_ctx
+
 def _find_kiwix_binary():
     """Find kiwix-serve binary in common locations"""
     locations = [
@@ -79,22 +134,62 @@ def _find_kiwix_binary():
     return None
 
 
-def _find_zim_files():
-    """Find Wikipedia ZIM files in common locations"""
-    search_paths = [
-        Path.home() / "wikipedia-offline",
-        Path.home() / "Downloads",
-        Path("/data/wikipedia"),
-        Path("/var/lib/kiwix"),
-    ]
-    
-    for path in search_paths:
-        if path.exists():
-            zim_files = list(path.glob("*.zim"))
-            if zim_files:
-                return zim_files
-    
-    return []
+ZIM_SEARCH_PATHS = [
+    Path.home() / "wikipedia-offline",
+    Path.home() / "Downloads",
+    Path("/data/wikipedia"),
+    Path("/var/lib/kiwix"),
+]
+
+
+def _is_complete_zim(path: Path) -> bool:
+    """
+    Check the ZIM header: magic number, and file size equal to the MD5
+    checksum position + 16. Rejects partial downloads without reading the file.
+    """
+    try:
+        with open(path, 'rb') as f:
+            header = f.read(80)
+        if len(header) < 80 or header[:4] != b'ZIM\x04':
+            return False
+        checksum_pos = int.from_bytes(header[72:80], 'little')
+        return path.stat().st_size == checksum_pos + 16
+    except OSError:
+        return False
+
+
+def _zim_sort_key(path: Path):
+    """Newest dump first: date suffix in the name (e.g. _2026-06), then mtime"""
+    match = re.search(r'_(\d{4}-\d{2})\.zim$', path.name)
+    return (match.group(1) if match else '', path.stat().st_mtime)
+
+
+def _find_zim_files(search_paths: List[Path] = None) -> List[Path]:
+    """Find complete ZIM files in common locations, newest first"""
+    zim_files = []
+    for path in search_paths or ZIM_SEARCH_PATHS:
+        if not path.exists():
+            continue
+        for zim in path.glob("*.zim"):
+            if _is_complete_zim(zim):
+                zim_files.append(zim)
+            else:
+                print(f"⚠ Skipping incomplete ZIM (still downloading?): {zim}", file=sys.stderr)
+    return sorted(zim_files, key=_zim_sort_key, reverse=True)
+
+
+def resolve_zim_path(cli_value: str = None) -> Optional[Path]:
+    """Pick the ZIM to use: --zim flag, then WIKI_ZIM env var, then auto-discovery"""
+    explicit = cli_value or os.environ.get('WIKI_ZIM')
+    if explicit:
+        path = Path(explicit).expanduser()
+        if not path.is_file():
+            raise FileNotFoundError(f"ZIM file not found: {path}")
+        if not _is_complete_zim(path):
+            raise ValueError(f"Not a complete ZIM file (still downloading?): {path}")
+        return path
+    zim_files = _find_zim_files()
+    return zim_files[0] if zim_files else None
 
 
 def _is_kiwix_running(port=8080):
@@ -106,8 +201,8 @@ def _is_kiwix_running(port=8080):
         return False
 
 
-def _start_kiwix_server(port=8080):
-    """Start Kiwix server if not already running"""
+def _start_kiwix_server(port=8080, zim_path: Path = None):
+    """Start Kiwix server serving zim_path if not already running"""
     global _kiwix_process
     
     # Check if already running
@@ -126,17 +221,16 @@ def _start_kiwix_server(port=8080):
         print("   mv kiwix-tools_*/kiwix-serve ~/.local/bin/")
         return False
     
-    # Find ZIM files
-    zim_files = _find_zim_files()
-    if not zim_files:
-        print("❌ No Wikipedia ZIM files found. Download with:")
+    if zim_path is None:
+        print("❌ No Wikipedia ZIM file found. Download with:")
         print("   scripts/setup_full_offline_wikipedia.sh")
+        print("   or pass --zim PATH / set WIKI_ZIM")
         return False
-    
+
     # Start server
     try:
-        zim_paths = [str(f) for f in zim_files]
-        cmd = [kiwix_bin, "--port", str(port)] + zim_paths
+        print(f"   ZIM: {zim_path}")
+        cmd = [kiwix_bin, "--port", str(port), "--address", "127.0.0.1", str(zim_path)]
         
         _kiwix_process = subprocess.Popen(
             cmd,
@@ -179,18 +273,20 @@ atexit.register(_cleanup_kiwix)
 class KiwixWikipediaRAG:
     """RAG system using local Kiwix Wikipedia server with two-stage AI pipeline"""
     
-    def __init__(self, model_name: str = None, selection_model: str = None, kiwix_url: str = "http://localhost:8080", auto_start: bool = True):
+    def __init__(self, model_name: str = None, selection_model: str = None, kiwix_url: str = "http://localhost:8080", auto_start: bool = True, zim_path: Path = None):
         """
         Initialize the Kiwix RAG system with specialized models
-        
+
         Args:
             model_name: Summarization model name (auto-detects if None)
             selection_model: Article selection model name (auto-detects if None)
             kiwix_url: URL of the Kiwix server
             auto_start: Automatically start Kiwix server if not running
+            zim_path: ZIM file to serve when auto-starting (see resolve_zim_path)
         """
         self.kiwix_url = kiwix_url.rstrip('/')
-        
+        self.zim_path = zim_path
+
         # Test Kiwix connection or auto-start
         try:
             response = requests.get(f"{self.kiwix_url}/", timeout=5)
@@ -199,11 +295,16 @@ class KiwixWikipediaRAG:
         except Exception as e:
             if auto_start:
                 port = int(kiwix_url.split(":")[-1]) if ":" in kiwix_url else 8080
-                if not _start_kiwix_server(port):
+                if not _start_kiwix_server(port, zim_path):
                     raise Exception(f"Could not connect to or start Kiwix server at {self.kiwix_url}")
             else:
                 raise Exception(f"Could not connect to Kiwix server at {self.kiwix_url}: {e}")
-        
+
+        # Base URL for direct article lookups, e.g. http://localhost:8080/content/wikipedia_en_all_nopic_2026-06
+        self.content_base = self._discover_content_base()
+        if self.content_base:
+            print(f"✓ Wikipedia book: {self.content_base}")
+
         # Detect available models
         available_models = self._get_available_models()
         
@@ -218,11 +319,43 @@ class KiwixWikipediaRAG:
         print(f"✓ Selection model: {self.selection_model}")
         print(f"✓ Summarization model: {self.model_name}")
     
+    def _discover_content_base(self) -> Optional[str]:
+        """
+        Find the book URL prefix from the server's OPDS catalog, preferring the
+        book that matches self.zim_path. Falls back to the ZIM file stem.
+        """
+        stem = self.zim_path.stem if self.zim_path else None
+        try:
+            response = requests.get(f"{self.kiwix_url}/catalog/v2/entries", params={'count': 100}, timeout=5)
+            response.raise_for_status()
+            hrefs = re.findall(r'<link[^>]*type="text/html"[^>]*href="([^"]*/content/[^"]+)"', response.text)
+        except Exception:
+            hrefs = []
+        if hrefs:
+            matching = [h for h in hrefs if stem and h.rstrip('/').endswith(f"/{stem}")]
+            wikipedia = [h for h in hrefs if '/wikipedia_' in h]
+            href = (matching or wikipedia or hrefs)[0].rstrip('/')
+            return href if href.startswith('http') else f"{self.kiwix_url}{href}"
+        if stem:
+            return f"{self.kiwix_url}/content/{stem}"
+        return None
+
+    def _article_url(self, title: str) -> Optional[str]:
+        """Direct URL for an article title (titles are case-sensitive, spaces become underscores)"""
+        if not getattr(self, 'content_base', None):
+            return None
+        return f"{self.content_base}/{quote(title.replace(' ', '_'))}"
+
     def _get_available_models(self) -> List[str]:
-        """Get list of available Ollama models"""
+        """Get list of available Ollama models (also records parameter sizes for tags like ':latest')"""
+        self._model_param_sizes = {}
         try:
             response = ollama.list()
             if hasattr(response, 'models'):
+                for m in response.models:
+                    size = _parse_param_billions(getattr(getattr(m, 'details', None), 'parameter_size', None) or '')
+                    if size is not None:
+                        self._model_param_sizes[m.model] = size
                 return [m.model for m in response.models]
             elif isinstance(response, dict) and 'models' in response:
                 return [m['name'] if isinstance(m, dict) else m.model for m in response['models']]
@@ -230,98 +363,63 @@ class KiwixWikipediaRAG:
         except Exception as e:
             print(f"⚠ Could not list models: {e}")
             return []
-    
+
+    def _model_param_billions(self, name: str) -> Optional[float]:
+        """Parameter count in billions, from the tag (e.g. ':26b') or from `ollama list` details"""
+        tag = name.split(':', 1)[1] if ':' in name else ''
+        size = _parse_param_billions(tag)
+        if size is None:
+            size = getattr(self, '_model_param_sizes', {}).get(name)
+        return size
+
+    def _is_eligible_model(self, name: str) -> bool:
+        """Reject coder/embedding/reranker/reasoning models and models below MIN_MODEL_PARAMS_B"""
+        if _is_excluded_model(name):
+            return False
+        size = self._model_param_billions(name)
+        return size is None or size >= MIN_MODEL_PARAMS_B
+
+    def _pick_model(self, preferences: List[str], available: List[str], role: str) -> str:
+        """
+        For each preference in order: exact tag match, else an eligible model of the
+        same family with another tag (e.g. 'qwen3.6' -> 'qwen3.6:35b'). Then any
+        eligible model, then any non-excluded model.
+        """
+        canonical = {_canonical_model_name(a): a for a in available}
+        for pref in preferences:
+            exact = canonical.get(_canonical_model_name(pref))
+            if exact:
+                return exact
+            family = pref.split(':')[0]
+            for avail in available:
+                if avail.split(':')[0] == family and self._is_eligible_model(avail):
+                    return avail
+
+        for avail in available:
+            if self._is_eligible_model(avail):
+                print(f"⚠ Using fallback {role} model: {avail}")
+                return avail
+        for avail in available:
+            if not _is_excluded_model(avail):
+                print(f"⚠ Using fallback {role} model: {avail} (below {MIN_MODEL_PARAMS_B:g}B, expect weak results)")
+                return avail
+
+        raise Exception(f"No suitable Ollama model for {role}. Pull one, e.g.: ollama pull qwen3:8b")
+
     def _detect_selection_model(self, preferred: str, available: List[str]) -> str:
         """
-        Detect best model for article selection (classification task)
-        
-        Research shows specialized models perform better:
-        - Qwen2.5-32B: 92% classification accuracy, superior instruction-following
-        - Mistral-Small: 88% accuracy, fastest inference
-        - Hermes-3-8B: 78% accuracy, best for resource-constrained environments
-        - Avoid: DeepSeek R1 (reasoning models fail at simple tasks)
+        Detect best model for article selection (classification task).
+        Reasoning, coder and sub-4B models are never auto-selected.
         """
         if preferred:
             return preferred
-        
-        # Priority order based on performance benchmarks
-        selection_preferences = [
-            'qwen2.5:32b-instruct',
-            'qwen2.5:32b',
-            'qwen2.5:14b-instruct',
-            'qwen2.5:14b',
-            'qwen2.5:7b-instruct',
-            'mistral-small:latest',
-            'mistral-small',
-            'mistral:7b',           # Mistral-7B excellent for classification
-            'hermes3:8b',
-            'hermes3:latest',
-            'llama3.2:3b',
-            'llama3.1:8b',          # Fallback: use for synthesis instead
-            'phi3:medium',
-        ]
-        
-        # Find first available model
-        for model in selection_preferences:
-            if model in available:
-                return model
-            # Check partial matches (e.g., 'qwen2.5' matches 'qwen2.5:32b-instruct-q4_K_M')
-            base_name = model.split(':')[0]
-            for avail in available:
-                if avail.startswith(base_name):
-                    return avail
-        
-        # Last resort: use first available non-reasoning model
-        for model in available:
-            if 'r1' not in model.lower() and 'deepseek' not in model.lower():
-                print(f"⚠ Using fallback selection model: {model}")
-                return model
-        
-        raise Exception("No suitable models found for article selection")
-    
+        return self._pick_model(SELECTION_MODEL_PREFERENCES, available, 'selection')
+
     def _detect_summarization_model(self, preferred: str, available: List[str]) -> str:
-        """
-        Detect best model for summarization (synthesis task)
-        
-        Prioritizes practical models for most users:
-        - Llama-3.1-8B: Excellent balance of quality and resource usage
-        - Gemma-2-27B/9B: Exceptional summarization quality with fast inference
-        - Mistral-7B: Fast and reliable
-        - Llama-3.1-70B: Optional for users with high-end hardware
-        """
+        """Detect best model for summarization (synthesis task)"""
         if preferred:
             return preferred
-        
-        # Priority order: practical models first, larger models for power users
-        summarization_preferences = [
-            'llama3.1:8b-instruct',
-            'llama3.1:8b',
-            'gemma2:27b',
-            'gemma2:9b',
-            'mistral:7b',
-            'granite3.1-dense:8b',
-            'qwen2.5:7b',
-            'llama3.3:70b',        # Optional: for power users
-            'llama3.1:70b-instruct',
-            'llama3.1:70b',
-        ]
-        
-        # Find first available model
-        for model in summarization_preferences:
-            if model in available:
-                return model
-            # Check partial matches
-            base_name = model.split(':')[0]
-            for avail in available:
-                if avail.startswith(base_name):
-                    return avail
-        
-        # Last resort: use first available model
-        if available:
-            print(f"⚠ Using fallback summarization model: {available[0]}")
-            return available[0]
-        
-        raise Exception("No Ollama models found")
+        return self._pick_model(SUMMARIZATION_MODEL_PREFERENCES, available, 'summarization')
     
     def extract_search_terms(self, question: str) -> List[str]:
         """
@@ -556,7 +654,9 @@ class KiwixWikipediaRAG:
                     break
                 for suffix in [" (TV series)", " (film)", " (TV show)", " (television)"]:
                     media_title = f"{term}{suffix}"
-                    media_url = f"{self.kiwix_url}/wikipedia_en_all_maxi_2024-01/A/{media_title.replace(' ', '_')}"
+                    media_url = self._article_url(media_title)
+                    if not media_url:
+                        break
                     try:
                         response = requests.head(media_url, timeout=2, allow_redirects=True)
                         if response.status_code == 200:
@@ -574,7 +674,9 @@ class KiwixWikipediaRAG:
                 if len(all_results) >= 100:
                     break
                 # Try exact match by requesting the article directly  
-                direct_url = f"{self.kiwix_url}/wikipedia_en_all_maxi_2024-01/A/{term.replace(' ', '_')}"
+                direct_url = self._article_url(term)
+                if not direct_url:
+                    break
                 try:
                     response = requests.head(direct_url, timeout=2, allow_redirects=True)
                     if response.status_code == 200:
@@ -790,14 +892,15 @@ Output ONLY comma-separated numbers (example: 2,5,8):
 """
 
         try:
-            response = ollama.chat(
-                model=self.selection_model,
-                messages=[{'role': 'user', 'content': selection_prompt}],
+            response = self._chat(
+                self.selection_model,
+                selection_prompt,
                 options={
                     'num_predict': 200,
                     'temperature': 0.2,
                     'top_p': 0.9,
-                }
+                },
+                stage='Selection',
             )
             answer = response['message']['content'].strip()
             if answer:
@@ -897,6 +1000,25 @@ Output ONLY comma-separated numbers (example: 2,5,8):
             print(f"⚠ Fetch error for {url}: {e}")
             return ""
     
+    def _chat(self, model: str, prompt: str, options: Dict, stage: str):
+        """
+        Single-prompt ollama.chat with num_ctx sized to the prompt and thinking off
+        (thinking models otherwise spend num_predict on hidden reasoning and return
+        empty content). Logs prompt_eval_count so context truncation is visible.
+        """
+        num_ctx = _num_ctx_for(prompt, options.get('num_predict', 0))
+        response = ollama.chat(
+            model=model,
+            messages=[{'role': 'user', 'content': prompt}],
+            options={**options, 'num_ctx': num_ctx},
+            think=False,
+        )
+        prompt_tokens = response.get('prompt_eval_count') or 0
+        print(f"  📏 {stage}: {prompt_tokens} prompt tokens (num_ctx {num_ctx})")
+        if prompt_tokens >= num_ctx - options.get('num_predict', 0):
+            print(f"  ⚠ {stage} prompt may have been truncated to fit num_ctx {num_ctx}")
+        return response
+
     def estimate_question_complexity(self, question: str) -> int:
         """
         Estimate question complexity to determine how many articles to retrieve
@@ -1103,18 +1225,16 @@ Your synthesized answer with inline citations (stop after final paragraph):"""
         # Query summarization model with optimized settings
         # Llama-3.1-70B: 3x faster inference, excellent coherent generation
         try:
-            response = ollama.chat(
-                model=self.model_name,
-                messages=[{
-                    'role': 'user',
-                    'content': prompt
-                }],
+            response = self._chat(
+                self.model_name,
+                prompt,
                 options={
                     'num_predict': 1500,   # Allow comprehensive answers
                     'temperature': 0.7,    # Balance factual accuracy with coherence
                     'top_p': 0.9,
                     'repeat_penalty': 1.1, # Reduce repetition in synthesis
-                }
+                },
+                stage='Synthesis',
             )
             
             answer = response['message']['content']
@@ -1232,22 +1352,27 @@ def main():
                         help='Number of Wikipedia articles to retrieve (auto-detects by complexity)')
     parser.add_argument('--no-auto-start', action='store_true',
                         help='Do not automatically start Kiwix server')
-    
+    parser.add_argument('--zim', type=str, default=None,
+                        help='Wikipedia ZIM file (default: $WIKI_ZIM, else newest complete *.zim in ~/wikipedia-offline)')
+
     args = parser.parse_args()
-    
+
     try:
         # Check dependencies
         if not _check_dependencies():
             return 1
-        
+
         print()
-        
+
+        zim_path = resolve_zim_path(args.zim)
+
         # Initialize RAG with two-stage pipeline (auto-starts Kiwix if needed)
         rag = KiwixWikipediaRAG(
             model_name=args.model,
             selection_model=args.selection_model,
             kiwix_url=args.kiwix_url,
-            auto_start=not args.no_auto_start
+            auto_start=not args.no_auto_start,
+            zim_path=zim_path
         )
         
         if args.question:
@@ -1286,4 +1411,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

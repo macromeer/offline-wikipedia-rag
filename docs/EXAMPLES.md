@@ -29,7 +29,7 @@ This ensures:
 The easiest way to use the system:
 
 ```bash
-$ python wikipedia_rag_kiwix.py
+$ ./run.sh
 
 ======================================================================
  🌐 Offline Wikipedia AI Assistant
@@ -65,7 +65,7 @@ $ python wikipedia_rag_kiwix.py
 Quick one-off questions:
 
 ```bash
-$ python wikipedia_rag_kiwix.py --question "Who invented the telephone?"
+$ ./run.sh --question "Who invented the telephone?"
 
 ======================================================================
 ❓ Question: Who invented the telephone?
@@ -86,57 +86,57 @@ $ python wikipedia_rag_kiwix.py --question "Who invented the telephone?"
 
 ```bash
 # Use a specific Ollama model
-python wikipedia_rag_kiwix.py --model llama2 --question "Explain relativity"
+./run.sh --model llama2 --question "Explain relativity"
 
 # Use smaller model for faster responses
-python wikipedia_rag_kiwix.py --model deepseek-r1:7b
+./run.sh --model deepseek-r1:7b
 ```
 
 ## Adjust Number of Sources
 
 ```bash
 # Use only 1 Wikipedia article (faster, less context)
-python wikipedia_rag_kiwix.py --max-results 1 --question "What is DNA?"
+./run.sh --max-results 1 --question "What is DNA?"
 
 # Use 5 articles (slower, more comprehensive)
-python wikipedia_rag_kiwix.py --max-results 5 --question "Explain quantum physics"
+./run.sh --max-results 5 --question "Explain quantum physics"
 ```
 
 ## Example Questions to Try
 
 ### Science & Technology
 ```bash
-python wikipedia_rag_kiwix.py --question "How does a computer processor work?"
-python wikipedia_rag_kiwix.py --question "What is CRISPR gene editing?"
-python wikipedia_rag_kiwix.py --question "Explain black holes"
+./run.sh --question "How does a computer processor work?"
+./run.sh --question "What is CRISPR gene editing?"
+./run.sh --question "Explain black holes"
 ```
 
 ### History
 ```bash
-python wikipedia_rag_kiwix.py --question "What caused the French Revolution?"
-python wikipedia_rag_kiwix.py --question "Who was Cleopatra?"
-python wikipedia_rag_kiwix.py --question "Explain the Industrial Revolution"
+./run.sh --question "What caused the French Revolution?"
+./run.sh --question "Who was Cleopatra?"
+./run.sh --question "Explain the Industrial Revolution"
 ```
 
 ### Arts & Culture
 ```bash
-python wikipedia_rag_kiwix.py --question "Who painted the Mona Lisa?"
-python wikipedia_rag_kiwix.py --question "What is Renaissance art?"
-python wikipedia_rag_kiwix.py --question "Explain jazz music"
+./run.sh --question "Who painted the Mona Lisa?"
+./run.sh --question "What is Renaissance art?"
+./run.sh --question "Explain jazz music"
 ```
 
 ### Philosophy & Ideas
 ```bash
-python wikipedia_rag_kiwix.py --question "What is existentialism?"
-python wikipedia_rag_kiwix.py --question "Explain Plato's theory of forms"
-python wikipedia_rag_kiwix.py --question "What is the scientific method?"
+./run.sh --question "What is existentialism?"
+./run.sh --question "Explain Plato's theory of forms"
+./run.sh --question "What is the scientific method?"
 ```
 
 ### Current Events & Geography
 ```bash
-python wikipedia_rag_kiwix.py --question "Where is Mount Everest?"
-python wikipedia_rag_kiwix.py --question "What is climate change?"
-python wikipedia_rag_kiwix.py --question "Explain the European Union"
+./run.sh --question "Where is Mount Everest?"
+./run.sh --question "What is climate change?"
+./run.sh --question "Explain the European Union"
 ```
 
 ## Advanced Usage
@@ -146,7 +146,7 @@ python wikipedia_rag_kiwix.py --question "Explain the European Union"
 If running Kiwix on different port or machine:
 
 ```bash
-python wikipedia_rag_kiwix.py \
+./run.sh \
   --kiwix-url http://192.168.1.100:8090 \
   --question "Your question"
 ```
@@ -167,7 +167,7 @@ questions=(
 
 for q in "${questions[@]}"; do
   echo "Asking: $q"
-  python wikipedia_rag_kiwix.py --question "$q" > "answer_${q//[^a-zA-Z]/_}.txt"
+  ./run.sh --question "$q" > "answer_${q//[^a-zA-Z]/_}.txt"
 done
 ```
 
