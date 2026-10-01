@@ -1,9 +1,12 @@
 #!/bin/bash
 
 # One-line installer for Offline Wikipedia RAG
-# Installs everything needed: Ollama, DeepSeek, Wikipedia, Python environment
+# Installs everything needed: Ollama, models, Wikipedia, Python environment (uv)
 
 set -e  # Exit on error
+
+REPO_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+cd "$REPO_DIR"
 
 BOLD='\033[1m'
 GREEN='\033[0;32m'
@@ -20,10 +23,10 @@ echo "This will install:"
 echo "  • Ollama AI runtime"
 echo "  • Mistral-7B model (~4.4GB) - article selection"
 echo "  • Llama-3.1-8B model (~4.9GB) - answer synthesis"
-echo "  • Full English Wikipedia (~102GB)"
-echo "  • Python environment"
+echo "  • English Wikipedia, no images (~50GB)"
+echo "  • Python environment (uv)"
 echo ""
-echo -e "${YELLOW}⚠️  Total download: ~112GB${NC}"
+echo -e "${YELLOW}⚠️  Total download: ~60GB${NC}"
 echo -e "${YELLOW}⚠️  Time needed: 2-8 hours${NC}"
 echo ""
 read -p "Continue? (y/N): " -n 1 -r
@@ -39,8 +42,8 @@ echo -e "${BLUE}📋 Checking system requirements...${NC}"
 
 # Check disk space
 AVAILABLE_SPACE=$(df -BG . | awk 'NR==2 {print $4}' | sed 's/G//')
-if [ "$AVAILABLE_SPACE" -lt 120 ]; then
-    echo -e "${RED}❌ Error: Need at least 120GB free space, have ${AVAILABLE_SPACE}GB${NC}"
+if [ "$AVAILABLE_SPACE" -lt 65 ]; then
+    echo -e "${RED}❌ Error: Need at least 65GB free space, have ${AVAILABLE_SPACE}GB${NC}"
     exit 1
 fi
 echo -e "${GREEN}✓${NC} Disk space: ${AVAILABLE_SPACE}GB available"
@@ -118,48 +121,28 @@ fi
 echo ""
 echo -e "${BLUE}🐍 Step 3/5: Setting up Python environment...${NC}"
 
-# Check for conda/mamba
-if command -v mamba &> /dev/null; then
-    CONDA_CMD="mamba"
-elif command -v conda &> /dev/null; then
-    CONDA_CMD="conda"
-else
-    echo -e "${YELLOW}⚠️  Conda/Mamba not found. Installing Miniforge...${NC}"
-    if [ "$OS" == "linux" ]; then
-        wget -O /tmp/miniforge.sh "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh"
-    elif [ "$OS" == "macos" ]; then
-        wget -O /tmp/miniforge.sh "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-MacOSX-x86_64.sh"
-    fi
-    bash /tmp/miniforge.sh -b -p $HOME/miniforge3
-    rm /tmp/miniforge.sh
-    export PATH="$HOME/miniforge3/bin:$PATH"
-    CONDA_CMD="mamba"
-    echo -e "${GREEN}✓${NC} Miniforge installed"
+if ! command -v uv &> /dev/null; then
+    echo "Installing uv..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
 fi
-
-# Create environment
-$CONDA_CMD env create -f environment.yml -y 2>/dev/null || $CONDA_CMD env update -f environment.yml -y
-echo -e "${GREEN}✓${NC} Python environment ready"
+uv sync
+echo -e "${GREEN}✓${NC} Python environment ready (.venv)"
 
 # Step 4: Download Wikipedia
 echo ""
-echo -e "${BLUE}📚 Step 4/5: Downloading Wikipedia (~102GB)...${NC}"
+echo -e "${BLUE}📚 Step 4/5: Downloading Wikipedia (~50GB)...${NC}"
 echo "This will take 2-8 hours depending on your connection."
 echo ""
 
-./setup_full_offline_wikipedia.sh
+scripts/setup_full_offline_wikipedia.sh --yes
 
 # Step 5: Test the system
 echo ""
 echo -e "${BLUE}🧪 Step 5/5: Testing the system...${NC}"
 
-# Start Kiwix if not running
-if ! pgrep -f "kiwix-serve" > /dev/null; then
-    ./start_offline_rag.sh
-fi
-
-# Run test
-$CONDA_CMD run -n wikipedia-rag python wikipedia_rag_kiwix.py --question "What is AI?" > /tmp/rag_test.txt 2>&1 || true
+# Run test (starts kiwix-serve on the downloaded ZIM automatically)
+./run.sh --question "What is AI?" > /tmp/rag_test.txt 2>&1 || true
 
 if grep -q "Answer:" /tmp/rag_test.txt; then
     echo -e "${GREEN}✓${NC} System test passed"
@@ -175,16 +158,12 @@ echo -e "${GREEN}${BOLD}============================================${NC}"
 echo ""
 echo -e "${BOLD}🚀 Quick Start:${NC}"
 echo ""
-echo "  1. Activate environment:"
-echo "     conda activate wikipedia-rag"
-echo ""
-echo "  2. Start chatting:"
-echo "     python wikipedia_rag_kiwix.py"
+echo "  Start chatting:"
+echo "     ./run.sh"
 echo ""
 echo "  Or ask a single question:"
-echo "     python wikipedia_rag_kiwix.py --question 'What is quantum computing?'"
+echo "     ./run.sh --question 'What is quantum computing?'"
 echo ""
 echo -e "${BOLD}📖 Documentation:${NC} See README.md for more options"
-echo -e "${BOLD}🆘 Help:${NC} Run './help' for quick reference"
 echo ""
 echo "Enjoy your private, offline AI assistant! 🎉"

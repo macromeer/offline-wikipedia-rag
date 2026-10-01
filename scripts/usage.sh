@@ -2,52 +2,41 @@
 
 # Simple usage script - shows common commands
 
-cat << 'EOF'
+cat << 'USAGE'
 ========================================
 Offline Wikipedia RAG - Usage Guide
 ========================================
 
 ## First Time Setup (do once)
-./setup_full_offline_wikipedia.sh
+scripts/setup_full_offline_wikipedia.sh     # kiwix-serve + newest Wikipedia ZIM
+uv sync                                      # Python environment (.venv)
 
-## Daily Use
-
-# 1. Make sure Kiwix is running
-./start_offline_rag.sh
-
-# 2. Activate environment
-mamba activate wikipedia-rag
-
-# 3. Use the RAG system
+## Daily Use (starts Kiwix automatically)
 
    # Interactive mode
-   python wikipedia_rag_kiwix.py
+   ./run.sh
 
    # Single question
-   python wikipedia_rag_kiwix.py --question "Your question here"
+   ./run.sh --question "Your question here"
 
-   # Specify model
-   python wikipedia_rag_kiwix.py --model deepseek-r1:latest
+   # Specific ZIM file (default: newest complete *.zim in ~/wikipedia-offline)
+   ./run.sh --zim /path/to/wikipedia_en_all_nopic_2026-06.zim   # or export WIKI_ZIM=...
+
+   # Specific models
+   ./run.sh --model gemma4:26b --selection-model qwen3.6:35b
 
 ## Useful Commands
 
-# Check if Kiwix is running
-ps aux | grep kiwix-serve
-
-# Restart Kiwix
-pkill kiwix-serve
-~/.local/bin/kiwix-serve --port=8080 ~/wikipedia-offline/*.zim &
-
-# Access Wikipedia in browser
-http://localhost:8080
+# Run Kiwix on its own (browse at http://localhost:8080)
+scripts/start_offline_rag.sh
 
 # List available Ollama models
 ollama list
 
-# Test the system
-python test_system.py
+# Unit tests
+uv run pytest -m "not integration"
 
 ========================================
-For more details, see READY.md
+For more details, see README.md
 ========================================
-EOF
+USAGE

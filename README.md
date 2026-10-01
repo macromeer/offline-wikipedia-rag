@@ -9,57 +9,48 @@
 
 ## TL;DR
 
-- 100% offline: Ollama + Kiwix + specialized models → answers with inline citations
+- 100% offline: Ollama + Kiwix + local models → answers with inline citations
 - Zero API keys, zero telemetry, zero cost
-- Pulls 6M+ English Wikipedia articles (≈102 GB) and answers in 10‑20 s on CPU
+- Uses the Kiwix English Wikipedia dump without images (≈50 GB, 6M+ articles)
 - One command (`./run.sh`) to start chatting; optional installer handles everything
 
 ## 🚀 Quick Start
 
-### Recommended (automated install)
-
 ```bash
 git clone https://github.com/macromeer/offline-wikipedia-rag.git
 cd offline-wikipedia-rag
-./scripts/install.sh        # installs Ollama, models, Wikipedia dump, env
+./scripts/install.sh        # installs Ollama, models, uv env, newest Wikipedia dump
 ./run.sh                    # launches the assistant
 ```
 
-Installer runtime: 2‑8 hours (mostly download). Disk: ~120 GB free.
+Installer runtime: a few hours (mostly the download). Disk: ~65 GB free.
 
-### Already have dependencies?
-
-```bash
-./run.sh
-```
-
-The launcher activates the conda env, checks Ollama, starts Kiwix if needed, finds the best local models, and tears everything down when you exit.
+Already have Ollama, [uv](https://docs.astral.sh/uv/) and a Wikipedia ZIM? Just run `./run.sh`. It syncs the Python environment, checks Ollama, starts Kiwix on the newest complete ZIM it finds, picks the best local models, and stops Kiwix when you exit.
 
 ## Requirements
 
 | Resource | Recommended |
 | --- | --- |
 | OS | Linux (Ubuntu 20.04+/Fedora 35+) or macOS |
-| Disk | ≥120 GB free (102 GB Wikipedia + models + env) |
-| RAM | 16‑24 GB for Mistral‑7B + Llama‑3.1‑8B |
+| Disk | ≥65 GB free (≈50 GB Wikipedia + models) |
+| RAM | 16 GB for 8B-class models; more for larger ones |
 | CPU/GPU | Multi-core CPU. GPU optional (Ollama auto-detects CUDA/ROCm/Metal). |
+| Tools | [Ollama](https://ollama.com), [uv](https://docs.astral.sh/uv/); kiwix-serve optional, for clickable source links (installed by the setup script) |
 
-Smaller RAM works with smaller models; high-memory rigs can bump to Qwen2.5‑32B or Gemma2‑27B. See `docs/TWO_STAGE_AI_PIPELINE.md` for pairings.
-
-## Manual Setup (if you skip the installer)
+## Manual Setup
 
 ```bash
-# 1. Install Ollama and pull models
-curl -fsSL https://ollama.ai/install.sh | sh
-ollama pull mistral:7b          # selection
-ollama pull llama3.1:8b         # synthesis
+# 1. Ollama and models (any instruction model ≥4B works; see "Models" below)
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull qwen3:8b            # answer model; must support tool calling
+ollama pull mistral:7b          # article selection, only for --retrieval kiwix
 
-# 2. Create the Python env
-conda env create -f environment.yml
-conda activate wikipedia-rag
+# 2. Python environment
+uv sync
 
-# 3. Download Wikipedia (long download)
-./scripts/setup_full_offline_wikipedia.sh
+# 3. kiwix-serve + newest Wikipedia ZIM (resumable; re-run to continue)
+./scripts/setup_full_offline_wikipedia.sh                 # asks which edition
+./scripts/setup_full_offline_wikipedia.sh --variant mini  # ~13 GB, intros only
 
 # 4. Run
 ./run.sh
@@ -68,471 +59,149 @@ conda activate wikipedia-rag
 ## Usage
 
 ```bash
-# Preferred: handles env + services automatically
-./run.sh
-
-# Manual mode
-mamba activate wikipedia-rag
-python wikipedia_rag_kiwix.py --question "What is machine learning?"
+./run.sh                                         # interactive chat
+./run.sh --question "What is machine learning?"  # single question
 ```
 
-While running you can ask follow-up questions interactively, or pass `--question` for single-shot mode. Helpful flags:
-
-```bash
-python wikipedia_rag_kiwix.py --help
-  --model llama3.1:8b           # override synthesis model
-  --selection-model mistral:7b  # override article selector
-  --max-results 4               # force number of articles
-  --no-auto-start               # skip auto Kiwix launch
-```
-
-Example session:
+The interactive mode is a chat: follow-up questions ("and when was it founded?") use the last few questions and answers. Type `/reset` to start a new conversation and `quit` to exit.
 
 ```
-✓ Connected to Kiwix server at http://localhost:8080
-✓ Selection model: mistral:7b
-✓ Summarization model: llama3.1:8b
-🔍 Searching local Wikipedia for: What are the goals of NASA?
-  🔑 Focus keywords: nasa, goals, ...
-  📄 Fetching article abstracts…
-  🤖 Selecting with mistral:7b…
-✓ AI selected 3 article(s): Goals, NASA, Timeline of Solar System exploration
-… answer with citations …
+--zim PATH               ZIM file (default: $WIKI_ZIM, else newest complete *.zim
+                         in ~/wikipedia-offline, ~/Downloads, /data/wikipedia, /var/lib/kiwix)
+--model NAME             answer model (default: auto-detect)
+--max-results N          passages per search (default: 8-12 by question complexity)
+--max-rounds N           rounds of searches before the model must answer (default: 2)
+--history-turns N        earlier turns kept for follow-ups (default: 4; 0 disables)
+--no-tools               retrieve once and answer in one call (no tool loop, no history);
+                         also used automatically for models without tool calling
+--retrieval zim|kiwix    zim (default): read the ZIM directly; kiwix: the v1 pipeline
+                         over kiwix-serve HTTP, kept as a baseline for evaluation
+--dense-index DIR        dense index to use (default: the one built for this ZIM, if any)
+--no-dense               full-text retrieval only, even if a dense index exists
+--selection-model NAME   article selection model, --retrieval kiwix only
+--kiwix-url URL          Kiwix server for source links (default: http://localhost:8080)
+--no-auto-start          don't start kiwix-serve automatically
 ```
 
-## Highlights
+Partially downloaded ZIM files are detected from their header and skipped, so you can keep a download running in the same folder.
 
-- Privacy by default – all computation happens locally (no telemetry, no API keys)
-- Full-text Wikipedia (January 2024) served via Kiwix
-- Two-stage pipeline: Mistral‑7B ranks articles using abstracts, Llama‑3.1‑8B synthesizes multi-source answers with inline `[1][2][3]` citations
-- Adaptive retrieval depth: 3‑6 articles depending on question complexity
-- Works on CPU, accelerates automatically if a GPU is available
+### Models
 
-## Architecture (1‑minute view)
+The answer model is auto-detected in this order: Gemma 4, Qwen 3.6/3.5, Qwen 3, then Llama 3.1, Gemma 2, Mistral and others. It never auto-selects coder, embedding, reranker or reasoning (`r1`, DeepSeek) models, nor models under 4B parameters unless nothing else is installed. Override with `--model`.
+
+The chat needs a model with tool calling (`ollama show MODEL` lists `tools` under Capabilities; Gemma 4, Qwen 3.x and Llama 3.1 have it). With a model that lacks it, each question is retrieved once and answered without the tool loop or history.
+
+The v1 pipeline (`--retrieval kiwix`) also uses a selection model, auto-detected in the order Qwen 3.6/3.5, Gemma 4, Qwen 3, Qwen 2.5, Mistral, Hermes 3, Llama 3.1; override with `--selection-model`.
+
+### Example
 
 ```
-Question → term extraction → Kiwix search → abstract fetch →
-Stage 1 (selection model) → full article fetch → Stage 2 (synthesis model)
-→ Answer + clickable citations
+✓ Wikipedia ZIM: wikipedia_en_all_nopic_2026-06.zim (dated 2026-06-17, full-text index)
+✓ Kiwix server started at http://localhost:8080
+✓ Model: gemma4:26b (searches with tools, up to 2 round(s))
+
+❓ Your question: What is the capital of Australia?
+  🔎 search "capital of Australia" → 8 passage(s), 8 new
+
+📖 Answer:
+   The capital city of Australia is Canberra [1].
+   ...
+📚 Sources (click to open):
+   [1] Canberra
+       http://localhost:8080/content/wikipedia_en_all_nopic_2026-06/Canberra
+⏱️  3.5s, first answer text after 2.2s; 1 tool call(s), 8 passage(s) shown, largest prompt 5920 tokens
+
+❓ Your question: How many people live there?
+  🔎 search "Canberra population" → 8 passage(s), 7 new
+
+📖 Answer:
+   At the 2021 census, Canberra had 452,670 residents [6][11][13]. ...
+📚 Sources (click to open):
+   [6] Canberra > Demographics
+       http://localhost:8080/content/wikipedia_en_all_nopic_2026-06/Canberra#Demographics
+   ...
+⏱️  5.6s, first answer text after 3.8s; 1 tool call(s), 8 passage(s) shown, largest prompt 3403 tokens
 ```
 
-Relevant docs:
+Without kiwix-serve the sources are listed as `Title > Section` only.
 
-- `docs/TWO_STAGE_AI_PIPELINE.md` – model pairing benchmarks
-- `docs/AUTOMATIC_SETUP.md` – what `run.sh` and the installer configure
+## How It Works
+
+```
+Question → model calls search_wikipedia("...") → exact title lookups + ZIM full-text
+search (libzim) [+ dense index, if built] → sections → chunks → BM25 rank (fused with
+dense rank) → numbered passages → model answers (or searches again, at most 2 rounds)
+→ streamed answer with [n] citations
+```
+
+1. **Tool loop**: the model gets two tools, `search_wikipedia(query)` and `read_section(title, section)`. It has to search before answering: if it answers from memory, that answer is dropped, a search for the question is run for it, and it is asked again (models skip the search surprisingly often; Qwen 3.6 almost always does). After two rounds of tool calls it must answer.
+2. **Find articles**: word spans of the query are looked up as exact titles (redirects followed, so "capital of australia" finds *Canberra*; disambiguation pages such as *ETF* are resolved to the listed article the full-text search agrees with). The ZIM's built-in Xapian index supplies further candidates.
+3. **Split**: each candidate article is split into its lead and sections (infoboxes, navboxes, references and citation markers removed) and packed into chunks of up to ~1,200 tokens, each prefixed with `Title > Section`.
+4. **Rank**: chunks are scored with BM25 using whole-Wikipedia term statistics, fused with the article's rank; the lead of every exact title match is always included. The top 8-12 go back to the model, numbered.
+   - **Optional dense index**: if you have built one ([docs/DENSE_INDEX.md](docs/DENSE_INDEX.md)), the query is also embedded and the 30 most similar passages in all of Wikipedia are fused in, so passages that answer the question in other words can be found. Building it embeds every passage once on the GPU (hours to a day for the full English dump).
+5. **Answer**: streamed to the terminal with inline `[n]` citations. Numbers stay the same for the whole conversation. Under the answer, the cited passages are listed, and any `[n]` that matches no retrieved passage is flagged.
+6. **History**: the last 4 questions and answers are kept, plus the titles of the passages they cited; passage text is not carried over, so a follow-up searches again.
+
+Retrieval needs no server and typically takes 0.1-0.6 s on the full English dump; a question with very common words can take 1-2 s the first time, until their term statistics are cached in `~/.cache/offline-wikipedia-rag/`. On the dev box (RTX PRO 4000, `gemma4:26b`), 11 test questions took 3.5-7.5 s end to end for simple ones, with the first answer text after 2-6 s, and 9-13 s for explanations and comparisons; `qwen3.6:35b` took 2-6 s for the same questions. The v1 pipeline (kiwix-serve search, LLM article selection over abstracts) is still available with `--retrieval kiwix`; see [docs/TWO_STAGE_AI_PIPELINE.md](docs/TWO_STAGE_AI_PIPELINE.md) and [docs/AUTOMATIC_SETUP.md](docs/AUTOMATIC_SETUP.md).
 
 ## Testing
 
 ```bash
-mamba activate wikipedia-rag
-pytest tests -v                 # full suite
-pytest tests/test_rag_functions.py -v
-pytest -m "not integration"     # skip network/Kiwix checks
+uv run pytest -m "not integration"      # unit tests, no ZIM/Kiwix/Ollama needed
+uv run pytest                           # also integration tests on ZIMs found on disk
+uv run pytest tests/ --cov=. --cov-report=html
 ```
 
-Unit tests cover search-term extraction, complexity estimation, model detection, and mocked Kiwix flows. CI runs `tests.yml` on every PR.
+Unit tests cover section parsing and chunking (on fixture pages in `tests/fixtures/`), title matching and ranking, the dense index (keys, quantisation, shards to search graph, hybrid fusion), the tool loop against a scripted Ollama (forced search, round cap, streaming, history, citation checks), the tools, search-term extraction, model detection, ZIM discovery and context sizing. Integration tests run against `~/wikipedia-dev/wikipedia_en_100_2026-08.zim` (override with `WIKI_DEV_ZIM`) and the full English ZIM if present (the chat tests also need Ollama; pick the model with `WIKI_TEST_MODEL`); they skip otherwise. CI runs the unit tests on Python 3.10-3.12 for every PR.
 
 ## Project Layout
 
 ```
 offline-wikipedia-rag/
-├── run.sh / scripts/           # automation helpers
-├── wikipedia_rag_kiwix.py      # main application
-├── docs/                       # design notes and how-tos
-├── tests/                      # pytest suite
-├── environment.yml             # conda env
-└── README.md
-```
-
-## Contributing
-
-Issues and PRs are welcome! Ideas that help: additional language dumps, GUIs, Docker images, alternative model profiles, or performance/testing improvements. Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
-
-## 🎬 Demo
-
-```bash
-$ python wikipedia_rag_kiwix.py --question "What are the goals of NASA?"
-
-✓ Connected to Kiwix server at http://localhost:8080
-✓ Selection model: mistral:7b
-✓ Summarization model: llama3.1:8b
-
-🔍 Searching local Wikipedia for: What are the goals of NASA?
-  ✓ Retrieved 11 unique candidates
-✓ Found 11 candidate article(s)
-  📄 Fetching article abstracts for AI selection...
-  🤖 Selecting with mistral:7b (using article abstracts)...
-✓ AI selected 3 article(s): Goals, NASA, Timeline of Solar System exploration
-  📊 Reading ~20 paragraphs per article (max 8k chars each)
-  📄 Fetching: Goals
-  📄 Fetching: NASA
-  📄 Fetching: Timeline of Solar System exploration
-🤖 Generating synthesis with llama3.1:8b...
-⏱️  Total time: 13.6s
-
-======================================================================
-❓ Question: What are the goals of NASA?
-======================================================================
-
-📖 Answer:
-
-NASA's primary goals encompass a wide range of objectives, from advancing 
-space exploration to conducting aeronautics research. The agency was 
-established in 1958 [2] as an independent federal agency responsible for 
-the civil space program, aeronautics research, and space research.
-
-NASA's early goals focused on achieving human spaceflight, which began with 
-Project Mercury [2]. The Apollo Program, launched in response to President 
-Kennedy's goal of landing an American on the Moon by the end of the 1960s [3], 
-marked a significant achievement in space exploration.
-
-NASA's goals also extend beyond human spaceflight to exploring the Solar 
-System [3]. The agency has sent numerous robotic spacecraft to explore 
-various planets and celestial bodies, greatly expanding our understanding 
-of the universe.
-
-----------------------------------------------------------------------
-📚 Source Articles (click to open):
-   [1] Goals
-       http://localhost:8080/wikipedia_en_all_maxi_2024-01/A/Goals
-   [2] NASA
-       http://localhost:8080/wikipedia_en_all_maxi_2024-01/A/NASA
-   [3] Timeline of Solar System exploration
-       http://localhost:8080/content/wikipedia_en_all_maxi_2024-01/A/Timeline_of_Solar_System_exploration
-======================================================================
-```
-
-## 🚀 Quick Start
-
-### One-Line Install
-
-```bash
-# Clone and run automated setup
-git clone https://github.com/yourusername/offline-wikipedia-rag.git
-cd offline-wikipedia-rag
-./scripts/install.sh
-```
-
-The installer will:
-1. ✅ Install Ollama and recommended AI models (Mistral-7B + Llama-3.1-8B)
-2. ✅ Download complete Wikipedia (102GB)
-3. ✅ Set up all dependencies
-4. ✅ Test the system
-
-### Then Just Run It!
-
-After installation, it's super simple - no manual steps needed:
-
-```bash
-./run.sh
-```
-
-That's it! The script automatically:
-- ✅ Activates the correct Python environment
-- ✅ Checks if Ollama is running
-- ✅ Starts Kiwix server if needed
-- ✅ Detects best AI models available
-- ✅ Cleans up when you exit
-
-**Time needed:** 2-8 hours (mostly downloading)  
-**Disk space:** ~120GB
-
-## 📋 System Requirements
-
-### Recommended Setup
-- **OS**: Linux (Ubuntu 20.04+, Debian 11+, Fedora 35+) or macOS
-- **Disk**: 120GB free space (Wikipedia + models)
-- **RAM**: 16-24GB for recommended models (Mistral-7B + Llama-3.1-8B)
-- **CPU**: Multi-core processor (x86_64 or ARM64)
-
-### Alternative Configurations
-- **Budget**: 12GB RAM - Use smaller models (still works well!)
-- **High-end**: 32GB+ RAM - Use larger models (Qwen2.5-32B + Gemma2-27B)
-
-See [docs/TWO_STAGE_AI_PIPELINE.md](docs/TWO_STAGE_AI_PIPELINE.md) for detailed model recommendations.
-
-### GPU Support (Optional)
-- **GPU acceleration** is automatically detected and used if available
-- Works perfectly fine **without GPU** (CPU-only mode)
-- Supported: NVIDIA (CUDA), Apple Silicon (Metal), AMD (ROCm)
-- No manual GPU setup required - Ollama handles everything automatically
-
-## 💻 Manual Installation
-
-<details>
-<summary>Click to expand manual installation steps</summary>
-
-### 1. Install Dependencies
-
-```bash
-# Install Ollama
-curl -fsSL https://ollama.ai/install.sh | sh
-
-# Pull recommended AI models
-ollama pull mistral:7b      # Selection model (~4.4GB)
-ollama pull llama3.1:8b     # Summarization model (~4.9GB)
-
-# Install Python environment
-conda env create -f environment.yml
-conda activate wikipedia-rag
-```
-
-### 2. Download Wikipedia
-
-```bash
-# Automated download (~102GB, takes 2-8 hours)
-./scripts/setup_full_offline_wikipedia.sh
-```
-
-### 3. Start Using
-
-```bash
-# Just run it - everything is automatic!
-./run.sh
-```
-
-See [docs/AUTOMATIC_SETUP.md](docs/AUTOMATIC_SETUP.md) for details on what happens automatically.
-
-</details>
-
-## ⚡ Performance
-
-### Response Speed
-- **Total time**: 10-25 seconds for complete answers (search + selection + synthesis)
-- **Token generation**: ~50-60 tokens/sec with GPU, ~5-15 tokens/sec CPU-only
-- **Network**: Fully offline, zero network latency
-- Performance varies based on hardware, models used, and number of articles retrieved
-
-### GPU Acceleration
-GPU support is **completely optional**:
-- ✅ Ollama **automatically detects** and uses GPU if available (NVIDIA/AMD/Apple Silicon)
-- ✅ No CUDA/ROCm installation needed - Ollama includes everything
-- ✅ Works great on **CPU-only** systems - no GPU required
-- ✅ Seamlessly falls back to CPU if no GPU found
-
-**Bottom line**: Just install and run - GPU acceleration works automatically if you have one, runs fine without it.
-
-## 🎯 Usage
-
-The script automatically handles everything - just run it! It will:
-- ✅ Check if Ollama is running
-- ✅ Auto-start Kiwix server if needed
-- ✅ Auto-detect best available models
-- ✅ Clean up on exit
-
-📖 See [docs/AUTOMATIC_SETUP.md](docs/AUTOMATIC_SETUP.md) for full details on automatic setup.
-
-### Easiest Way (Recommended)
-
-```bash
-# One command - handles environment activation and everything!
-./run.sh
-```
-
-### Alternative (Manual Environment Activation)
-
-```bash
-# Activate environment
-mamba activate wikipedia-rag
-
-# Run the script
-python wikipedia_rag_kiwix.py
-```
-
-Then type your questions naturally:
-```
-❓ Your question: Explain photosynthesis
-❓ Your question: Who was Marie Curie?
-❓ Your question: What caused World War 2?
-```
-
-### Single Question Mode
-
-```bash
-./run.sh --question "What is machine learning?"
-
-# Or with manual activation:
-# mamba activate wikipedia-rag
-# python wikipedia_rag_kiwix.py --question "What is machine learning?"
-```
-
-### Command Line Options
-
-```bash
-python wikipedia_rag_kiwix.py --help
-
-Options:
-  --question TEXT          Ask a single question
-  --model TEXT             Summarization model (default: auto-detect)
-  --selection-model TEXT   Article selection model (default: auto-detect)
-  --kiwix-url TEXT         Kiwix server URL (default: http://localhost:8080)
-  --max-results INT        Number of articles (default: auto by complexity)
-  --no-auto-start          Don't automatically start Kiwix server
-```
-
-### Advanced: Specify Models
-
-```bash
-# The script auto-detects the best models, but you can override:
-
-# Recommended setup (most users)
-./run.sh --selection-model mistral:7b --model llama3.1:8b
-
-# Alternative for better selection (if you have 32GB+ RAM)
-./run.sh --selection-model qwen2.5:32b-instruct --model llama3.1:8b
-```
-
-## 🏗️ How It Works
-
-```mermaid
-graph LR
-    A[Your Question] --> B[Search Wikipedia]
-    B --> C[Fetch Abstracts]
-    C --> D[Stage 1: AI Selection]
-    D --> E[Fetch Full Articles]
-    E --> F[Stage 2: AI Synthesis]
-    F --> G[Answer with Citations]
-```
-
-### Two-Stage AI Pipeline
-
-1. **Wikipedia Search**
-   - Extracts search terms from your question
-   - Searches for 25+ candidate articles
-   - Direct lookup finds main articles
-
-2. **Stage 1: Content-Based Selection (Mistral-7B)**
-   - Fetches first paragraph (abstract) from each candidate
-   - AI evaluates actual content, not just titles
-   - Selects 3-6 most relevant articles
-   - Filters out lists, stubs, and irrelevant topics
-
-3. **Stage 2: Synthesis with Citations (Llama-3.1-8B)**
-   - Reads full content of selected articles
-   - Synthesizes comprehensive answer
-   - Adds inline citations [1][2][3] for every fact
-   - Provides clickable URLs to source articles
-
-### Why Two Models?
-
-Specialized models perform better than one model doing everything:
-- **Selection model** (default: Mistral-7B): Fast, accurate classification from article abstracts
-- **Summarization model** (default: Llama-3.1-8B): Excellent world knowledge and synthesis
-- **Result**: 85-88% selection accuracy + high-quality answers in 10-18 seconds
-- System auto-detects available models and selects best options
-
-## 🛠️ Technology Stack
-
-- **AI Models**: 
-  - [Mistral-7B](https://mistral.ai/) - Fast, accurate article selection from abstracts
-  - [Llama-3.1-8B](https://ai.meta.com/llama/) - High-quality answer synthesis with citations
-  - Alternative selection models: Qwen2.5 (32B/14B/7B), Hermes-3-8B
-  - Alternative synthesis models: Gemma-2 (27B/9B), Llama-3.3-70B
-- **Wikipedia**: [Kiwix](https://www.kiwix.org/) - Offline Wikipedia server (ZIM format)
-- **Runtime**: [Ollama](https://ollama.ai/) - Local AI model runner
-- **Language**: Python 3.10+
-
-## 📁 Project Structure
-
-```
-offline-wikipedia-rag/
-├── wikipedia_rag_kiwix.py              # Main RAG application
-├── environment.yml                     # Python environment
-├── requirements.txt                    # Python dependencies
+├── wikipedia_rag_kiwix.py              # entry point (run.sh calls it)
+├── wikirag/
+│   ├── cli.py                          # arguments, terminal chat, output
+│   ├── agent.py                        # tool loop, streaming, chat history
+│   ├── tools.py                        # search_wikipedia / read_section
+│   ├── citations.py                    # citation table and [n] checks
+│   ├── llm.py                          # Ollama model detection and calls
+│   ├── oneshot.py                      # --no-tools path and the v1 kiwix pipeline
+│   ├── kiwix.py / zimfiles.py          # kiwix-serve links, ZIM discovery
+│   └── questions.py                    # question complexity → passage count
+├── retrieval/
+│   ├── zim_store.py                    # libzim search, section parsing, chunking, BM25, fusion
+│   ├── dense.py                        # optional dense index: query embedding, vector search
+│   └── build_dense.py                  # builds the dense index (python -m retrieval.build_dense)
+├── run.sh                              # launcher (uv run)
+├── pyproject.toml / uv.lock            # Python dependencies
 ├── scripts/
-│   ├── install.sh                      # One-line installer
-│   ├── setup_full_offline_wikipedia.sh # Wikipedia downloader
-│   └── start_offline_rag.sh            # Quick start script
-├── tests/
-│   ├── test_system.py                  # System validation tests
-│   ├── test_token_speed.py             # Token generation benchmarks
-│   └── test_cpu_speed.py               # CPU performance tests
-└── docs/                               # Additional documentation
+│   ├── install.sh                      # full installer
+│   ├── setup_full_offline_wikipedia.sh # kiwix-serve + newest ZIM download
+│   ├── start_offline_rag.sh            # run kiwix-serve on its own
+│   └── bench_*.py                      # token speed benchmarks
+├── tests/                              # pytest suite
+└── docs/
 ```
-
-## 🧪 Testing
-
-The project includes a comprehensive pytest test suite:
-
-```bash
-# Run all unit tests
-pytest tests/ -v
-
-# Run specific test file
-pytest tests/test_rag_functions.py -v
-
-# Run tests with coverage
-pytest tests/ --cov=. --cov-report=html
-
-# Run only unit tests (skip integration tests)
-pytest -m "not integration"
-```
-
-**Test Coverage:**
-- ✅ Search term extraction (proper nouns, content words, stopword filtering)
-- ✅ Complexity estimation (simple, multi-part, comparison questions)
-- ✅ Model detection (selection priority, reasoning model avoidance)
-- ✅ Integration tests for Kiwix/Ollama (marked separately)
-
-## 🤝 Contributing
-
-Contributions are welcome! Areas for improvement:
-- Support for other languages (German, French, Spanish Wikipedia)
-- GUI interface
-- Docker container
-- Additional AI models
-- Performance optimizations
-- More test coverage
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-## ⚠️ Known Limitations
-
-- **First download takes time**: Wikipedia is 102GB
-- **RAM usage**: Two models need ~10-12GB RAM (or 16GB recommended)
-- **CPU-based**: Works great on CPU, GPU support optional
-- **English only**: Currently supports English Wikipedia only
 
 ## 🆘 Troubleshooting
 
-**Problem: "Connection refused to Kiwix"**
-```bash
-# Restart Kiwix server
-./scripts/start_offline_rag.sh
-```
+- **"No Wikipedia ZIM file found"**: run `./scripts/setup_full_offline_wikipedia.sh`, or pass `--zim PATH`. A download still in progress is skipped on purpose.
+- **"Ollama model not found"**: `ollama pull llama3.1:8b` (or any model listed under Models).
+- **Out of memory**: pick smaller models with `--model` / `--selection-model`.
 
-**Problem: "Ollama model not found"**
-```bash
-# Pull the recommended models
-ollama pull mistral:7b
-ollama pull llama3.1:8b
-```
+See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for more.
 
-**Problem: "Out of memory"**
-```bash
-# System will automatically fall back to smaller available models
-# Or manually specify a smaller model
-python wikipedia_rag_kiwix.py --model llama3.2:3b
-```
+## 🤝 Contributing
 
-See [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for more solutions.
+Issues and PRs are welcome: GUIs, Docker images, alternative model profiles, performance or testing improvements. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## 📜 License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE).
 
 ## 🙏 Acknowledgments
 
-- [Mistral AI](https://mistral.ai/) - For the excellent Mistral-7B model (default selection model)
-- [Meta AI](https://ai.meta.com/) - For the powerful Llama-3.1-8B model (default synthesis model)
-- [Kiwix](https://www.kiwix.org/) - For offline Wikipedia technology
-- [Ollama](https://ollama.ai/) - For easy local AI model deployment
-- [Wikimedia Foundation](https://www.wikimedia.org/) - For Wikipedia
-
-## ⭐ Star History
-
-If you find this project useful, please consider giving it a star! It helps others discover the project.
-
----
-
-**Made with ❤️ for the open-source community**
+- [Kiwix](https://www.kiwix.org/) - offline Wikipedia technology
+- [Ollama](https://ollama.com/) - local model runtime
+- [Wikimedia Foundation](https://www.wikimedia.org/) - Wikipedia
+- The open-weight model authors (Meta, Mistral AI, Alibaba Qwen, Google Gemma)

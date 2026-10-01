@@ -16,16 +16,8 @@ sudo dnf install curl
 
 ### Problem: "Insufficient disk space"
 **Solution:**
-- Free up at least 120GB
+- Free up ~55GB for the `nopic` edition, or use `--variant mini` (~13GB)
 - Use external drive: `ln -s /path/to/external/drive ~/wikipedia-offline`
-
-### Problem: "Miniforge installation failed"
-**Solution:**
-```bash
-# Manual installation
-wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh
-bash Miniforge3-Linux-x86_64.sh
-```
 
 ## Runtime Issues
 
@@ -51,7 +43,7 @@ lsof -i :8080
 
 # Use different port
 kiwix-serve --port=8090 ~/wikipedia-offline/*.zim &
-python wikipedia_rag_kiwix.py --kiwix-url http://localhost:8090
+./run.sh --kiwix-url http://localhost:8090
 ```
 
 ### Problem: "Ollama model not found"
@@ -73,7 +65,7 @@ ollama pull deepseek-r1:latest
 ```bash
 # See available models at ollama.ai/library
 ollama pull llama2
-python wikipedia_rag_kiwix.py --model llama2
+./run.sh --model llama2
 ```
 
 ### Problem: "Out of memory"
@@ -85,7 +77,7 @@ python wikipedia_rag_kiwix.py --model llama2
 ```bash
 # 7B model (needs ~4GB RAM)
 ollama pull deepseek-r1:7b
-python wikipedia_rag_kiwix.py --model deepseek-r1:7b
+./run.sh --model deepseek-r1:7b
 ```
 
 2. Increase swap space:
@@ -107,7 +99,7 @@ sudo swapon /swapfile
 1. Try more specific query:
 ```python
 # Instead of "Python"
-python wikipedia_rag_kiwix.py --question "Python programming language"
+./run.sh --question "Python programming language"
 ```
 
 2. Check Kiwix in browser:
@@ -140,33 +132,30 @@ htop  # or top
 
 3. Reduce articles fetched:
 ```bash
-python wikipedia_rag_kiwix.py --max-results 1 --question "Your question"
+./run.sh --max-results 1 --question "Your question"
 ```
 
 ## Environment Issues
 
-### Problem: "conda: command not found"
+### Problem: "uv: command not found"
 **Solution:**
 ```bash
-export PATH="$HOME/miniforge3/bin:$PATH"
-echo 'export PATH="$HOME/miniforge3/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
 ### Problem: "Module not found: ollama"
 **Solution:**
 ```bash
-conda activate wikipedia-rag
-pip install ollama beautifulsoup4 requests
+uv sync          # or just use ./run.sh, which syncs automatically
 ```
 
 ## Wikipedia/Kiwix Issues
 
 ### Problem: "404 Not Found" when downloading Wikipedia
 **Solution:**
-- ZIM files are updated monthly
-- Check latest version at: https://download.kiwix.org/zim/wikipedia/
-- Edit `setup_full_offline_wikipedia.sh` with correct filename
+- Old ZIM files are removed from the mirror when new dumps are published
+- `./scripts/setup_full_offline_wikipedia.sh` looks up the newest file automatically; re-run it
+- `--dry-run` prints the URL it would download
 
 ### Problem: "Kiwix serves wrong content"
 **Solution:**
@@ -187,13 +176,13 @@ kiwix-serve --port=8080 ~/wikipedia-offline/*.zim &
 2. **Add more RAM** (16GB+ recommended)
 3. **Use GPU** with CUDA-enabled Ollama
 4. **Reduce article count**: `--max-results 2`
-5. **Use smaller model**: `deepseek-r1:7b` instead of default
+5. **Use smaller model**: e.g. `--model llama3.1:8b`
 
 ### Reduce disk space:
 
 ```bash
-# Use Wikipedia without images (saves ~10GB)
-# Download: wikipedia_en_all_nopic_*.zim instead
+# nopic (default, ~49GB) instead of maxi (~119GB), or mini (~13GB, intros only)
+./scripts/setup_full_offline_wikipedia.sh --variant mini
 ```
 
 ## Getting Help

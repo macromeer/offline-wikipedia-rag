@@ -30,18 +30,14 @@ Thank you for your interest in contributing! This project aims to make AI with W
 
 ```bash
 # Fork and clone the repository
-git clone https://github.com/yourusername/offline-wikipedia-rag.git
+git clone https://github.com/<your-username>/offline-wikipedia-rag.git
 cd offline-wikipedia-rag
 
-# Create development environment
-conda env create -f environment.yml
-conda activate wikipedia-rag
-
-# Install development dependencies
-pip install -r requirements-dev.txt
+# Create the environment (runtime + dev dependencies) with uv
+uv sync
 
 # Run tests
-python -m pytest tests/
+uv run pytest -m "not integration"
 ```
 
 ## Pull Request Process
