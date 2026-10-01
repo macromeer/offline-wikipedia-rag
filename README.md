@@ -35,14 +35,14 @@ Already have Ollama, [uv](https://docs.astral.sh/uv/) and a Wikipedia ZIM? Just 
 | Disk | ≥65 GB free (≈50 GB Wikipedia + models) |
 | RAM | 16 GB for 8B-class models; more for larger ones |
 | CPU/GPU | Multi-core CPU. GPU optional (Ollama auto-detects CUDA/ROCm/Metal). |
-| Tools | [Ollama](https://ollama.com), [uv](https://docs.astral.sh/uv/), kiwix-serve (installed by the setup script) |
+| Tools | [Ollama](https://ollama.com), [uv](https://docs.astral.sh/uv/); kiwix-serve optional, for clickable source links (installed by the setup script) |
 
 ## Manual Setup
 
 ```bash
 # 1. Ollama and models (any instruction model ≥4B works; see "Models" below)
 curl -fsSL https://ollama.com/install.sh | sh
-ollama pull mistral:7b          # selection
+ollama pull mistral:7b          # selection (only for --retrieval kiwix)
 ollama pull llama3.1:8b         # synthesis
 
 # 2. Python environment
@@ -69,9 +69,11 @@ Each question is answered on its own; the interactive mode does not keep chat hi
 --zim PATH               ZIM file (default: $WIKI_ZIM, else newest complete *.zim
                          in ~/wikipedia-offline, ~/Downloads, /data/wikipedia, /var/lib/kiwix)
 --model NAME             synthesis model (default: auto-detect)
---selection-model NAME   article selection model (default: auto-detect)
---max-results N          number of articles (default: by question complexity)
---kiwix-url URL          Kiwix server (default: http://localhost:8080)
+--selection-model NAME   article selection model, --retrieval kiwix only
+--max-results N          passages to retrieve (default: 8-12 by question complexity)
+--retrieval zim|kiwix    zim (default): read the ZIM directly; kiwix: the v1 pipeline
+                         over kiwix-serve HTTP, kept as a baseline for evaluation
+--kiwix-url URL          Kiwix server for source links (default: http://localhost:8080)
 --no-auto-start          don't start kiwix-serve automatically
 ```
 
@@ -84,54 +86,64 @@ Auto-detection prefers, in order, Qwen 3.6/3.5, Gemma 4 and Qwen 3 families, the
 ### Example
 
 ```
-✓ Wikipedia book: http://localhost:8080/content/wikipedia_en_all_nopic_2026-06
-✓ Selection model: qwen3.6:35b
+✓ Wikipedia ZIM: wikipedia_en_all_nopic_2026-06.zim (dated 2026-06-17, full-text index)
+✓ Kiwix server started at http://localhost:8080
 ✓ Summarization model: gemma4:26b
 
-🔍 Searching local Wikipedia for: What causes a solar eclipse?
-  🤖 Selecting with qwen3.6:35b (using article abstracts)...
-  📏 Selection: 545 prompt tokens (num_ctx 16384)
-✓ AI selected 4 article(s): Solar eclipse, Hybrid solar eclipse, ...
+🔍 Searching local Wikipedia for: What are the goals of NASA?
+  🎯 Title matches: NASA
+✓ Retrieved 8 passage(s) from 3 article(s) in 0.32s (14 articles scored)
+  📄 NASA
+  📄 NASA > Management > Strategic plan
+  ...
 🤖 Generating synthesis with gemma4:26b...
-  📏 Synthesis: 2068 prompt tokens (num_ctx 16384)
+  📏 Synthesis: 2867 prompt tokens (num_ctx 16384)
+⏱️  Total time: 9.6s
 
 📖 Answer:
-   A solar eclipse is caused when the Moon passes between the Earth and the
-   Sun, obscuring the view of the Sun from a specific part of the Earth [1]. ...
+   NASA's primary goals involve expanding human knowledge, advancing space
+   exploration, and driving technological and economic innovation [2]. ...
 
-📚 Source Articles (click to open):
-   [1] Solar eclipse
-       http://localhost:8080/content/wikipedia_en_all_nopic_2026-06/Solar_eclipse
+📚 Sources (click to open):
+   [1] NASA
+       http://localhost:8080/content/wikipedia_en_all_nopic_2026-06/NASA
+   [2] NASA > Management > Strategic plan
+       http://localhost:8080/content/wikipedia_en_all_nopic_2026-06/NASA#Strategic_plan
 ```
+
+Without kiwix-serve the sources are listed as `Title > Section` only.
 
 ## How It Works
 
 ```
-Question → term extraction → Kiwix search → abstract fetch →
-Stage 1 (selection model) → full article fetch → Stage 2 (synthesis model)
-→ Answer + clickable citations
+Question → exact title lookups + ZIM full-text search (libzim) → parse candidate
+articles into sections → chunk → BM25 rank → synthesis model → answer with
+section-level citations
 ```
 
-1. **Search**: extracts likely article titles from the question, queries kiwix-serve's full-text search, and tries direct title lookups.
-2. **Selection**: fetches each candidate's first paragraph; the selection model picks the 3-6 most relevant articles.
-3. **Synthesis**: reads the selected articles and writes an answer with inline `[1][2]` citations and links to the local Kiwix pages.
+1. **Find articles**: word spans of the question are looked up as exact titles (redirects followed, so "capital of australia" finds *Canberra*; disambiguation pages such as *ETF* are resolved to the listed article the full-text search agrees with). The ZIM's built-in Xapian index supplies further candidates.
+2. **Split**: each candidate article is split into its lead and sections (infoboxes, navboxes, references and citation markers removed) and packed into chunks of up to ~1,200 tokens, each prefixed with `Title > Section`.
+3. **Rank**: chunks are scored with BM25 using whole-Wikipedia term statistics, fused with the article's rank; the lead of every exact title match is always included.
+4. **Synthesis**: the synthesis model answers from the top 8-12 passages with inline `[1][2]` citations.
 
-More detail: [docs/TWO_STAGE_AI_PIPELINE.md](docs/TWO_STAGE_AI_PIPELINE.md), [docs/AUTOMATIC_SETUP.md](docs/AUTOMATIC_SETUP.md).
+Retrieval needs no server and typically takes 0.1-0.6 s on the full English dump; a question with very common words can take 1-2 s the first time, until their term statistics are cached in `~/.cache/offline-wikipedia-rag/`. The code lives in [retrieval/zim_store.py](retrieval/zim_store.py). The v1 pipeline (kiwix-serve search, LLM article selection over abstracts) is still available with `--retrieval kiwix`; see [docs/TWO_STAGE_AI_PIPELINE.md](docs/TWO_STAGE_AI_PIPELINE.md) and [docs/AUTOMATIC_SETUP.md](docs/AUTOMATIC_SETUP.md).
 
 ## Testing
 
 ```bash
-uv run pytest -m "not integration"      # unit tests, no Kiwix/Ollama needed
+uv run pytest -m "not integration"      # unit tests, no ZIM/Kiwix/Ollama needed
+uv run pytest                           # also integration tests on ZIMs found on disk
 uv run pytest tests/ --cov=. --cov-report=html
 ```
 
-Unit tests cover search-term extraction, complexity estimation, model detection, ZIM discovery and context sizing. CI runs them on Python 3.10-3.12 for every PR.
+Unit tests cover section parsing and chunking (on fixture pages in `tests/fixtures/`), title matching and ranking, search-term extraction, model detection, ZIM discovery and context sizing. Integration tests run against `~/wikipedia-dev/wikipedia_en_100_2026-08.zim` (override with `WIKI_DEV_ZIM`) and the full English ZIM if present; they skip otherwise. CI runs the unit tests on Python 3.10-3.12 for every PR.
 
 ## Project Layout
 
 ```
 offline-wikipedia-rag/
 ├── wikipedia_rag_kiwix.py              # main application
+├── retrieval/zim_store.py              # libzim search, section parsing, chunking, BM25
 ├── run.sh                              # launcher (uv run)
 ├── pyproject.toml / uv.lock            # Python dependencies
 ├── scripts/

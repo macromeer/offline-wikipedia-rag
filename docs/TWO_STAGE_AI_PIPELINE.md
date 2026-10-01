@@ -1,5 +1,7 @@
 # Two-Stage AI Pipeline for Article Selection and Summarization
 
+> **v1 pipeline.** Since v2 the default (`--retrieval zim`) reads passages straight from the ZIM with libzim and ranks them with BM25; no selection model is used (see the README, "How It Works"). This page describes the older pipeline, still available with `--retrieval kiwix` as a baseline for evaluation.
+
 ## Overview
 
 The Wikipedia RAG system now uses a **two-stage specialized AI pipeline** based on research showing that different models excel at different tasks:

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-Full Offline Wikipedia RAG using Kiwix Server
-Automatically starts Kiwix server if not running
+Full Offline Wikipedia RAG over a Kiwix ZIM file.
+Retrieves passages straight from the ZIM with libzim (retrieval/); kiwix-serve
+is optional and only used for clickable source links. The v1 pipeline over
+kiwix-serve HTTP remains available with --retrieval kiwix.
 """
 
 import ollama
@@ -18,6 +20,8 @@ import sys
 import signal
 import atexit
 from pathlib import Path
+
+from retrieval import ZimStore
 
 
 # Global variable to track Kiwix process started by this script
@@ -256,7 +260,6 @@ def _start_kiwix_server(port=8080, zim_path: Path = None):
 
 def _cleanup_kiwix():
     """Stop Kiwix server if we started it"""
-    global _kiwix_process
     if _kiwix_process:
         try:
             os.killpg(os.getpgid(_kiwix_process.pid), signal.SIGTERM)
@@ -273,7 +276,8 @@ atexit.register(_cleanup_kiwix)
 class KiwixWikipediaRAG:
     """RAG system using local Kiwix Wikipedia server with two-stage AI pipeline"""
     
-    def __init__(self, model_name: str = None, selection_model: str = None, kiwix_url: str = "http://localhost:8080", auto_start: bool = True, zim_path: Path = None):
+    def __init__(self, model_name: str = None, selection_model: str = None, kiwix_url: str = "http://localhost:8080",
+                 auto_start: bool = True, zim_path: Path = None, retrieval: str = 'zim'):
         """
         Initialize the Kiwix RAG system with specialized models
 
@@ -282,43 +286,66 @@ class KiwixWikipediaRAG:
             selection_model: Article selection model name (auto-detects if None)
             kiwix_url: URL of the Kiwix server
             auto_start: Automatically start Kiwix server if not running
-            zim_path: ZIM file to serve when auto-starting (see resolve_zim_path)
+            zim_path: ZIM file to read (zim retrieval) or serve when auto-starting (see resolve_zim_path)
+            retrieval: 'zim' reads the ZIM directly with libzim (kiwix-serve only for
+                clickable links); 'kiwix' is the v1 pipeline over kiwix-serve HTTP
         """
+        if retrieval not in ('zim', 'kiwix'):
+            raise ValueError(f"Unknown retrieval mode: {retrieval}")
         self.kiwix_url = kiwix_url.rstrip('/')
         self.zim_path = zim_path
+        self.retrieval = retrieval
+        self.store = None
+        self.content_base = None
 
-        # Test Kiwix connection or auto-start
-        try:
-            response = requests.get(f"{self.kiwix_url}/", timeout=5)
-            response.raise_for_status()
-            print(f"✓ Connected to Kiwix server at {self.kiwix_url}")
-        except Exception as e:
-            if auto_start:
-                port = int(kiwix_url.split(":")[-1]) if ":" in kiwix_url else 8080
-                if not _start_kiwix_server(port, zim_path):
-                    raise Exception(f"Could not connect to or start Kiwix server at {self.kiwix_url}")
+        if retrieval == 'zim':
+            if zim_path is None:
+                raise Exception("No Wikipedia ZIM file found. Download one with scripts/setup_full_offline_wikipedia.sh, "
+                                "or pass --zim PATH / set WIKI_ZIM")
+            self.store = ZimStore(zim_path)
+            index_note = "full-text index" if self.store.has_fulltext else "no full-text index, title search only"
+            print(f"✓ Wikipedia ZIM: {zim_path.name} (dated {self.store.date or 'unknown'}, {index_note})")
+            # kiwix-serve is optional here: it only makes source links clickable
+            if self._connect_kiwix(auto_start and _find_kiwix_binary() is not None):
+                self.content_base = self._discover_content_base()
             else:
-                raise Exception(f"Could not connect to Kiwix server at {self.kiwix_url}: {e}")
+                print("ℹ kiwix-serve not running; sources are listed as 'Title > Section'")
+        else:
+            if not self._connect_kiwix(auto_start):
+                raise Exception(f"Could not connect to or start Kiwix server at {self.kiwix_url}")
+            # Base URL for direct article lookups, e.g. http://localhost:8080/content/wikipedia_en_all_nopic_2026-06
+            self.content_base = self._discover_content_base()
 
-        # Base URL for direct article lookups, e.g. http://localhost:8080/content/wikipedia_en_all_nopic_2026-06
-        self.content_base = self._discover_content_base()
         if self.content_base:
             print(f"✓ Wikipedia book: {self.content_base}")
 
         # Detect available models
         available_models = self._get_available_models()
         
-        # Configure selection model (Stage 1: Classification)
-        # Best: Qwen2.5-32B (superior classification), Mistral-Small, Hermes-3-8B
-        self.selection_model = self._detect_selection_model(selection_model, available_models)
-        
+        # Configure selection model (Stage 1: Classification); only the kiwix
+        # pipeline asks an LLM to pick articles, zim retrieval ranks passages itself
+        self.selection_model = None
+        if retrieval == 'kiwix':
+            self.selection_model = self._detect_selection_model(selection_model, available_models)
+            print(f"✓ Selection model: {self.selection_model}")
+
         # Configure summarization model (Stage 2: Synthesis)
-        # Best: Llama-3.1-70B (world knowledge + coherent generation), Gemma-2-27B
         self.model_name = self._detect_summarization_model(model_name, available_models)
-        
-        print(f"✓ Selection model: {self.selection_model}")
         print(f"✓ Summarization model: {self.model_name}")
     
+    def _connect_kiwix(self, auto_start: bool) -> bool:
+        """True if kiwix-serve answers at self.kiwix_url, starting it first if allowed"""
+        try:
+            response = requests.get(f"{self.kiwix_url}/", timeout=5)
+            response.raise_for_status()
+            print(f"✓ Connected to Kiwix server at {self.kiwix_url}")
+            return True
+        except Exception:
+            if not auto_start:
+                return False
+            port = int(self.kiwix_url.split(":")[-1]) if ":" in self.kiwix_url.split("//")[-1] else 8080
+            return _start_kiwix_server(port, self.zim_path)
+
     def _discover_content_base(self) -> Optional[str]:
         """
         Find the book URL prefix from the server's OPDS catalog, preferring the
@@ -345,6 +372,13 @@ class KiwixWikipediaRAG:
         if not getattr(self, 'content_base', None):
             return None
         return f"{self.content_base}/{quote(title.replace(' ', '_'))}"
+
+    def _path_url(self, path: str, anchor: str = None) -> Optional[str]:
+        """kiwix-serve URL for a ZIM entry path, optionally pointing at a section"""
+        if not self.content_base:
+            return None
+        url = f"{self.content_base}/{quote(path)}"
+        return f"{url}#{quote(anchor, safe='()')}" if anchor else url
 
     def _get_available_models(self) -> List[str]:
         """Get list of available Ollama models (also records parameter sizes for tags like ':latest')"""
@@ -1080,41 +1114,89 @@ Output ONLY comma-separated numbers (example: 2,5,8):
     def query_with_rag(self, question: str, max_results: int = None) -> Dict:
         """
         Answer question using RAG with local Wikipedia
-        
+
         Args:
             question: User's question
-            max_results: Number of articles to retrieve (auto-detected if None)
-            
+            max_results: Passages (zim retrieval) or articles (kiwix retrieval) to
+                use; auto-detected from question complexity if None
+
         Returns:
             Dictionary with answer and sources
         """
         start_time = time.time()
-        
+
+        print(f"\n🔍 Searching local Wikipedia for: {question}")
+        if self.retrieval == 'zim':
+            contents = self._retrieve_passages(question, max_results)
+        else:
+            contents = self._retrieve_articles(question, max_results)
+        if isinstance(contents, dict):  # nothing usable found; already an answer
+            return contents
+
+        answer = self._synthesize(question, contents)
+
+        elapsed_time = time.time() - start_time
+        print(f"⏱️  Total time: {elapsed_time:.1f}s")
+
+        return {
+            'question': question,
+            'answer': answer,
+            'sources': contents,
+            'model': self.model_name,
+            'time': elapsed_time
+        }
+
+    def _no_answer(self, question: str, answer: str) -> Dict:
+        return {'question': question, 'answer': answer, 'sources': [], 'model': self.model_name}
+
+    def _retrieve_passages(self, question: str, max_results: int = None):
+        """Section-level chunks straight from the ZIM (see retrieval.ZimStore.retrieve)"""
+        if max_results is None:
+            # 3-6 "articles" of complexity map to 8-12 passages
+            max_results = min(12, 2 * self.estimate_question_complexity(question) + 2)
+        result = self.store.retrieve(question, k=max_results)
+        if not result.chunks:
+            return self._no_answer(question, "No relevant Wikipedia articles found in the local ZIM. "
+                                             "Try rephrasing your question or using different search terms.")
+        if result.title_hits:
+            print(f"  🎯 Title matches: {', '.join(title for _, title in result.title_hits)}")
+        articles = len({sc.chunk.path for sc in result.chunks})
+        print(f"✓ Retrieved {len(result.chunks)} passage(s) from {articles} article(s) "
+              f"in {result.timings['total']:.2f}s ({len(result.candidates)} articles scored)")
+        contents = []
+        for sc in result.chunks:
+            chunk = sc.chunk
+            print(f"  📄 {chunk.label}")
+            contents.append({
+                'title': chunk.title,
+                'label': chunk.label,
+                'content': chunk.text.split('\n', 1)[-1],
+                'url': self._path_url(chunk.path, chunk.anchor),
+                'chunk_id': chunk.chunk_id,
+            })
+        return contents
+
+    def _retrieve_articles(self, question: str, max_results: int = None):
+        """v1 pipeline: kiwix-serve search, LLM selection over abstracts, first paragraphs of each article"""
         # Auto-detect complexity if not specified
         if max_results is None:
             max_results = self.estimate_question_complexity(question)
-        
-        print(f"\n🔍 Searching local Wikipedia for: {question}")
+
         primary_keywords = self.extract_primary_keywords(question)
         focus_phrases = self.extract_focus_phrases(question)
         if primary_keywords:
             print(f"  🔑 Focus keywords: {', '.join(primary_keywords[:4])}")
         if focus_phrases:
             print(f"  🧭 Focus phrases: {', '.join(focus_phrases[:2])}")
-        
+
         # Step 1: Search Kiwix (retrieves 3x more results)
         search_results = self.search_kiwix(question, max_results=max_results, primary_keywords=primary_keywords, focus_phrases=focus_phrases)
-        
+
         if not search_results:
-            return {
-                'question': question,
-                'answer': "No relevant Wikipedia articles found in local database.",
-                'sources': [],
-                'model': self.model_name
-            }
-        
+            return self._no_answer(question, "No relevant Wikipedia articles found in local database.")
+
         print(f"✓ Found {len(search_results)} candidate article(s)")
-        
+
         # Step 1.5: Fetch abstracts for better selection (first paragraph only)
         print(f"  📄 Fetching article abstracts for AI selection...")
         for i, result in enumerate(search_results):
@@ -1122,13 +1204,13 @@ Output ONLY comma-separated numbers (example: 2,5,8):
                 break
             abstract = self.fetch_article_abstract(result['url'])
             result['abstract'] = abstract
-        
+
         # Step 2: Use AI to select most relevant articles with context
         selected_results = self.select_relevant_articles(question, search_results, max_results, primary_keywords=primary_keywords, focus_phrases=focus_phrases)
-        
+
         selected_titles = [r['title'] for r in selected_results]
         print(f"✓ AI selected {len(selected_results)} article(s): {', '.join(selected_titles)}")
-        
+
         # Balance content depth with article count for consistent speed
         # Target: Keep total context under 40-50k chars for <15s response time
         paragraphs_per_article = {
@@ -1140,7 +1222,7 @@ Output ONLY comma-separated numbers (example: 2,5,8):
         }
         max_paragraphs = paragraphs_per_article.get(len(selected_results), 15)
         print(f"  📊 Reading ~{max_paragraphs} paragraphs per article (max 8k chars each)")
-        
+
         # Fetch article contents
         contents = []
         for result in selected_results:
@@ -1152,63 +1234,68 @@ Output ONLY comma-separated numbers (example: 2,5,8):
                     'content': content,
                     'url': result['url']
                 })
-        
+
         if not contents:
             # Check if question contains abbreviations/acronyms
             words = question.replace('?', '').replace('.', '').replace(',', '').split()
             abbreviations = [w.strip() for w in words if w.strip().isupper() and len(w.strip()) >= 2 and len(w.strip()) <= 5]
-            
+
             if abbreviations:
                 abbrev_list = ', '.join(f"'{a}'" for a in abbreviations[:3])  # Show max 3
                 suggestion = f"Could not find article content. Your question contains abbreviation(s): {abbrev_list}.\n\nTip: Try spelling out the full term (e.g., 'What is an exchange-traded fund?' instead of 'What is an ETF?')"
             else:
                 suggestion = "Could not retrieve article content. Try rephrasing your question or using different search terms."
-            
-            return {
-                'question': question,
-                'answer': suggestion,
-                'sources': [],
-                'model': self.model_name
-            }
-        
-        # Build context with article numbers for citation
-        context_parts = []
-        for idx, item in enumerate(contents, 1):
-            context_parts.append(f"[Article {idx}] **{item['title']}**:\n{item['content']}")
-        
-        context = "\n\n".join(context_parts)
-        
-        # Build source list for reference
-        source_list = "\n".join([f"[{idx}] {item['title']}" for idx, item in enumerate(contents, 1)])
-        
-        # Create synthesis-optimized prompt for Stage 2
-        # Llama-3.1-70B excels at world knowledge + coherent long-form generation
-        prompt = f"""You are an expert research analyst synthesizing information from multiple Wikipedia articles.
 
-TASK: Answer the question by synthesizing information from ALL provided articles.
+            return self._no_answer(question, suggestion)
+        return contents
+
+    def _synthesize(self, question: str, contents: List[Dict]) -> str:
+        """Stage 2: one chat call over the numbered sources, with inline [n] citations"""
+        passages = self.retrieval == 'zim'
+        unit = 'passage' if passages else 'article'
+
+        # Build context with source numbers for citation
+        context = "\n\n".join(
+            f"[{'Source' if passages else 'Article'} {idx}] **{item.get('label', item['title'])}**:\n{item['content']}"
+            for idx, item in enumerate(contents, 1)
+        )
+
+        # Build source list for reference
+        source_list = "\n".join(f"[{idx}] {item.get('label', item['title'])}" for idx, item in enumerate(contents, 1))
+
+        if passages:
+            coverage = ("3. **Relevance**: Passages were retrieved by keyword search; some may be off-topic. "
+                        "Use every passage that helps answer the question and ignore the rest.")
+        else:
+            coverage = "3. **Comprehensiveness**: Integrate information from ALL articles to support the verdict."
+
+        # Create synthesis-optimized prompt for Stage 2
+        prompt = f"""You are an expert research analyst synthesizing information from multiple Wikipedia {unit}s.
+
+TASK: Answer the question by synthesizing information from the provided {unit}s.
 
 Question: "{question}"
 
-Available Articles:
+Available {unit.capitalize()}s:
 {source_list}
 
-Article Contents:
+{unit.capitalize()} Contents:
 {context}
 
 SYNTHESIS INSTRUCTIONS:
 1. **Direct Verdict**: The first sentence must explicitly answer the question (e.g., "Yes, the film earned overwhelmingly positive reviews for... [1]"). Make the stance clear (yes/no/mixed) before adding context.
 2. **Stay On-Task**: Only include details that help judge quality/relevance of the topic. Omit long cast lists or plot summaries unless they support the verdict.
-3. **Comprehensiveness**: Integrate information from ALL articles to support the verdict.
+{coverage}
 4. **Coherence**: Create a logical narrative that links supporting evidence.
 5. **Evidence**: Use concrete facts (awards, box office, critical reception) with citations.
 6. **Perspectives**: Note differing viewpoints if present, and explain them.
 7. **Structure**: Write in clear paragraphs; use lists only when essential.
-8. **Accuracy**: Stay within the provided articles; do not invent data.
-9. **Citations**: Add inline citations [1], [2], [3] after EVERY fact drawn from the articles.
+8. **Accuracy**: Stay within the provided {unit}s; do not invent data.
+9. **Citations**: Add inline citations [1], [2], [3] after EVERY fact drawn from the {unit}s.
 
 CRITICAL - INLINE CITATIONS:
-- Add [1], [2], or [3] immediately after each fact, quote, or claim from that article
-- Multiple sources: use [1][2] or [1,2] if information appears in multiple articles
+- Add [1], [2], or [3] immediately after each fact, quote, or claim from that {unit}
+- Multiple sources: use [1][2] or [1,2] if information appears in multiple {unit}s
 - Example: "Bill Murray was born in 1950 [1] and starred in Ghostbusters [1][3]."
 - Every paragraph should have multiple citations showing source of information
 
@@ -1219,11 +1306,9 @@ FORMAT:
 - End the answer immediately after the final paragraph (no trailing lists or sections).
 
 Your synthesized answer with inline citations (stop after final paragraph):"""
-        
+
         print(f"🤖 Generating synthesis with {self.model_name}...")
-        
-        # Query summarization model with optimized settings
-        # Llama-3.1-70B: 3x faster inference, excellent coherent generation
+
         try:
             response = self._chat(
                 self.model_name,
@@ -1236,38 +1321,26 @@ Your synthesized answer with inline citations (stop after final paragraph):"""
                 },
                 stage='Synthesis',
             )
-            
+
             answer = response['message']['content']
-            
+
             # Remove redundant references/sources section at the end
             # LLMs often add this despite instructions - we show sources separately
-            import re
-            # Match "References:", "Sources:", "Bibliography:" followed by citation list
             pattern = r'\n\s*\[?(References?|Sources?|Bibliography)\]?[:\-]?\s*(\n.*)?$'
-            answer = re.sub(pattern, '', answer, flags=re.DOTALL | re.IGNORECASE).rstrip()
-            
+            return re.sub(pattern, '', answer, flags=re.DOTALL | re.IGNORECASE).rstrip()
+
         except Exception as e:
             print(f"  ⚠ Generation error: {e}")
-            answer = "Error generating answer. Please try again."
-        
-        elapsed_time = time.time() - start_time
-        print(f"⏱️  Total time: {elapsed_time:.1f}s")
-        
-        return {
-            'question': question,
-            'answer': answer,
-            'sources': contents,
-            'model': self.model_name,
-            'time': elapsed_time
-        }
-    
+            return "Error generating answer. Please try again."
+
     def interactive_mode(self):
         """Run interactive Q&A session"""
         print("\n" + "="*70)
         print(" 🌐 Offline Wikipedia AI Assistant")
         print("="*70)
         print(f" 🤖 Model: {self.model_name}")
-        print(f" 📚 Wikipedia: Local ({self.kiwix_url})")
+        source = self.zim_path.name if self.store else self.kiwix_url
+        print(f" 📚 Wikipedia: Local ({source})")
         print(f" 💡 Tip: Ask any question, type 'quit' to exit")
         print("="*70 + "\n")
         
@@ -1298,10 +1371,7 @@ Your synthesized answer with inline citations (stop after final paragraph):"""
                         print()
                 
                 print("\n" + "-"*70)
-                print("📚 Source Articles (click to open):")
-                for idx, s in enumerate(result['sources'], 1):
-                    print(f"   [{idx}] {s['title']}")
-                    print(f"       {s['url']}")
+                _print_sources(result['sources'])
                 print("="*70)
                 
             except KeyboardInterrupt:
@@ -1309,6 +1379,16 @@ Your synthesized answer with inline citations (stop after final paragraph):"""
                 break
             except Exception as e:
                 print(f"\n❌ Error: {e}")
+
+
+def _print_sources(sources: List[Dict]):
+    """Numbered source list; URLs only when kiwix-serve is available"""
+    linked = any(s.get('url') for s in sources)
+    print("📚 Sources (click to open):" if linked else "📚 Sources:")
+    for idx, s in enumerate(sources, 1):
+        print(f"   [{idx}] {s.get('label', s['title'])}")
+        if s.get('url'):
+            print(f"       {s['url']}")
 
 
 def _check_ollama_running():
@@ -1337,19 +1417,21 @@ def _check_dependencies():
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Offline Wikipedia RAG with Kiwix - Automatically handles setup',
-        epilog='The script will automatically start Kiwix server if needed.'
+        description='Offline Wikipedia RAG over a Kiwix ZIM file',
+        epilog='kiwix-serve is started automatically when installed (for clickable source links).'
     )
     parser.add_argument('--model', type=str, default=None,
                         help='Summarization model (auto-detects: llama3.1:8b, gemma2:27b)')
     parser.add_argument('--selection-model', type=str, default=None,
-                        help='Selection model (auto-detects: mistral:7b, qwen2.5)')
+                        help='Article selection model, --retrieval kiwix only (default: auto-detect)')
     parser.add_argument('--kiwix-url', type=str, default='http://localhost:8080',
                         help='Kiwix server URL')
     parser.add_argument('--question', type=str,
                         help='Single question (otherwise interactive mode)')
     parser.add_argument('--max-results', type=int, default=None,
-                        help='Number of Wikipedia articles to retrieve (auto-detects by complexity)')
+                        help='Passages (zim) or articles (kiwix) to retrieve (auto-detects by complexity)')
+    parser.add_argument('--retrieval', choices=['zim', 'kiwix'], default='zim',
+                        help='zim: read the ZIM directly with libzim (default); kiwix: v1 pipeline over kiwix-serve')
     parser.add_argument('--no-auto-start', action='store_true',
                         help='Do not automatically start Kiwix server')
     parser.add_argument('--zim', type=str, default=None,
@@ -1372,7 +1454,8 @@ def main():
             selection_model=args.selection_model,
             kiwix_url=args.kiwix_url,
             auto_start=not args.no_auto_start,
-            zim_path=zim_path
+            zim_path=zim_path,
+            retrieval=args.retrieval,
         )
         
         if args.question:
@@ -1393,10 +1476,7 @@ def main():
                     print()
             
             print("\n" + "-"*70)
-            print("📚 Source Articles (click to open):")
-            for idx, s in enumerate(result['sources'], 1):
-                print(f"   [{idx}] {s['title']}")
-                print(f"       {s['url']}")
+            _print_sources(result['sources'])
             print("="*70 + "\n")
         else:
             # Interactive mode
