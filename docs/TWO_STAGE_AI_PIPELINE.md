@@ -8,7 +8,7 @@ The Wikipedia RAG system now uses a **two-stage specialized AI pipeline** based 
 
 ### Stage 1: Article Selection (Classification)
 - **Purpose**: Accurately identify the most relevant Wikipedia articles
-- **Best Models**: Qwen2.5-32B (92% accuracy), Mistral-Small (88%), Hermes-3-8B (78%)
+- **Models**: auto-detected (e.g. qwen3.6, Qwen2.5, Mistral-Small, Hermes-3)
 - **Why**: Specialized classification models excel at structured output and instruction-following
 
 ### Stage 2: Summarization (Synthesis)
@@ -19,10 +19,11 @@ The Wikipedia RAG system now uses a **two-stage specialized AI pipeline** based 
 
 ## Why Two Models?
 
-Research from Perplexity Pro analysis shows:
-1. **Reasoning models fail at simple tasks**: DeepSeek R1 and similar models suffer from "low-complexity penalty" on classification
-2. **Specialized models perform better**: Using the right model for each task improves accuracy by 15-20%
-3. **Optimal resource usage**: Smaller efficient models for selection, larger models for synthesis
+The rationale was:
+1. **Reasoning models are a poor fit for selection**: DeepSeek R1 and similar models spend their budget thinking on a simple classification task
+2. **Optimal resource usage**: smaller efficient models for selection, larger models for synthesis
+
+Earlier versions of this page quoted selection accuracies (78-92%) and a 15-20% gain from specialised models. Those numbers were never measured and have been removed. For measured numbers see [Measured performance](#measured-performance).
 
 ## Recommended Model Combinations
 
@@ -91,15 +92,15 @@ ollama pull mistral-small:latest
 
 ## Model Performance Comparison
 
-| Model | Selection Accuracy | Summarization Quality | Speed | RAM Required | Best Use Case |
-|-------|-------------------|----------------------|-------|--------------|---------------|
-| **Qwen2.5-14B** | **88%** | Good | Fast | 16GB | **Recommended selection** |
-| **Llama-3.1-8B** | 82% | **Very Good** | **Fast** | 8GB | **Recommended summarization** |
-| **Qwen2.5-32B** | **92%** | Good | Medium | 32GB | High-performance selection |
-| **Gemma-2-27B** | 80% | Excellent | Medium | 28GB | High-performance summarization |
-| **Mistral-Small** | 88% | Good | Very Fast | 24GB | Balanced single-model option |
-| **Hermes-3-8B** | 78% | Good | Very Fast | 8GB | Budget selection |
-| **Llama-3.1-70B** | 85% | Excellent | Medium | 64GB | Optional: power users only |
+| Model | Summarization Quality | Speed | RAM Required | Best Use Case |
+|-------|----------------------|-------|--------------|---------------|
+| **Qwen2.5-14B** | Good | Fast | 16GB | **Recommended selection** |
+| **Llama-3.1-8B** | **Very Good** | **Fast** | 8GB | **Recommended summarization** |
+| **Qwen2.5-32B** | Good | Medium | 32GB | High-performance selection |
+| **Gemma-2-27B** | Excellent | Medium | 28GB | High-performance summarization |
+| **Mistral-Small** | Good | Very Fast | 24GB | Balanced single-model option |
+| **Hermes-3-8B** | Good | Very Fast | 8GB | Budget selection |
+| **Llama-3.1-70B** | Excellent | Medium | 64GB | Optional: power users only |
 
 ## Usage
 
@@ -195,22 +196,32 @@ export OLLAMA_MAX_LOADED_MODELS=2
 ollama serve --numa
 ```
 
+## Measured performance
+
+Measured with the eval harness ([EVALUATION.md](EVALUATION.md)) on 226 questions (hand-written, HotpotQA, PopQA), full English nopic ZIM, selection `qwen3.6:35b`, synthesis `gemma4:26b`, 2x RTX PRO 4000:
+
+| | v1 (this pipeline) | v2 one-shot, hybrid | v2 chat, hybrid |
+| --- | --- | --- | --- |
+| gold article in context | 0.59 | 0.77 | 0.76 |
+| answer contains the gold answer | 0.55 | 0.71 | 0.68 |
+| HotpotQA multi-hop answers | 0.25 | 0.40 | 0.43 |
+| seconds per question, p50 | 5.4 | 2.9 | 2.9 |
+
+The time and memory figures below are the original estimates for the listed models, not measurements.
+
 ## Expected Performance
 
 ### Recommended Setup (Qwen2.5-14B + Llama3.1-8B)
-- **Selection Accuracy**: 85-88%
 - **Synthesis Quality**: Very Good
 - **Total Time**: 10-18 seconds (depending on article count)
 - **Memory Usage**: 16-24GB RAM
 
 ### High-Performance Setup (Qwen2.5-32B + Gemma2-27B)
-- **Selection Accuracy**: 90-92%
 - **Synthesis Quality**: Excellent
 - **Total Time**: 15-22 seconds
 - **Memory Usage**: 48-60GB RAM
 
 ### Single Model (Mistral-Small)
-- **Selection Accuracy**: 85-88%
 - **Synthesis Quality**: Good
 - **Total Time**: 10-15 seconds
 - **Memory Usage**: 24GB RAM
@@ -262,10 +273,4 @@ ollama list | grep -E 'qwen|mistral|hermes'
 
 ## References
 
-This implementation is based on research analysis showing:
-1. Qwen 2.5 models dominate structured data handling (29-language support)
-2. Llama 3.1 70B excels in world knowledge tasks (3x faster inference)
-3. Two-stage pipelines deliver 88-92% selection accuracy vs 70-75% single-model
-4. Specialized models outperform general-purpose by 15-20%
-
-Source: Perplexity Pro analysis of optimal local LLM models for article selection and summarization (November 2025)
+The model choices above came from an unsourced analysis (November 2025); its accuracy claims are not reproduced here. Measured results: [EVALUATION.md](EVALUATION.md).

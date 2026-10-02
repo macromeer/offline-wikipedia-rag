@@ -25,6 +25,9 @@ dev = [
     "pytest-cov>=4.1.0",
     "pytest-mock>=3.12.0",
 ]
+eval = [
+    "pyarrow>=25.0.1",
+]
 
 [tool.uv]
 package = false

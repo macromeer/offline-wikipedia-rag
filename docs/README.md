@@ -4,6 +4,8 @@
 
 - **[EXAMPLES.md](EXAMPLES.md)** - Usage examples and sample questions
 - **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Common issues and solutions
+- **[EVALUATION.md](EVALUATION.md)** - How retrieval and answers are measured, and the results
+- **[DENSE_INDEX.md](DENSE_INDEX.md)** - Building the optional dense index
 
 ## Quick Links
 

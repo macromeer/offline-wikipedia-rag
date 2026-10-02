@@ -1,0 +1,26 @@
+{"id": "hw-expanse", "tag": "media-title", "question": "What is The Expanse about?", "answers": [], "gold_titles": ["The Expanse (TV series)", "The Expanse (novel series)"], "gold_mode": "any"}
+{"id": "hw-expanse-author", "tag": "media-title", "question": "Who wrote the books The Expanse is based on?", "answers": ["James S. A. Corey", "James S.A. Corey", "Daniel Abraham", "Ty Franck"], "gold_titles": ["The Expanse (novel series)", "James S. A. Corey"], "gold_mode": "any"}
+{"id": "hw-inception", "tag": "media-title", "question": "Who directed Inception?", "answers": ["Christopher Nolan"], "gold_titles": ["Inception"], "gold_mode": "any"}
+{"id": "hw-starry-night", "tag": "media-title", "question": "Who painted The Starry Night?", "answers": ["Vincent van Gogh", "van Gogh"], "gold_titles": ["The Starry Night"], "gold_mode": "any"}
+{"id": "hw-1984", "tag": "media-title", "question": "Who wrote the novel 1984?", "answers": ["George Orwell", "Orwell"], "gold_titles": ["Nineteen Eighty-Four", "George Orwell"], "gold_mode": "any"}
+{"id": "hw-beatles-album", "tag": "lowercase", "question": "what was the beatles first album", "answers": ["Please Please Me"], "gold_titles": ["Please Please Me", "The Beatles"], "gold_mode": "any"}
+{"id": "hw-spacex", "tag": "lowercase", "question": "who founded spacex", "answers": ["Elon Musk", "Musk"], "gold_titles": ["SpaceX"], "gold_mode": "any"}
+{"id": "hw-photosynthesis", "tag": "lowercase", "question": "how does photosynthesis work", "answers": [], "gold_titles": ["Photosynthesis"], "gold_mode": "any"}
+{"id": "hw-python-creator", "tag": "lowercase", "question": "who created the python programming language", "answers": ["Guido van Rossum", "van Rossum"], "gold_titles": ["Python (programming language)", "Guido van Rossum"], "gold_mode": "any"}
+{"id": "hw-etf", "tag": "abbreviation", "question": "What is an ETF?", "answers": ["exchange-traded fund", "exchange traded fund"], "gold_titles": ["Exchange-traded fund"], "gold_mode": "any"}
+{"id": "hw-crispr", "tag": "abbreviation", "question": "What does CRISPR stand for?", "answers": ["clustered regularly interspaced short palindromic repeats"], "gold_titles": ["CRISPR"], "gold_mode": "any"}
+{"id": "hw-dna", "tag": "abbreviation", "question": "What does DNA stand for?", "answers": ["deoxyribonucleic acid"], "gold_titles": ["DNA"], "gold_mode": "any"}
+{"id": "hw-nasa-goals", "tag": "abbreviation", "question": "What are the goals of NASA?", "answers": [], "gold_titles": ["NASA"], "gold_mode": "any"}
+{"id": "hw-nasa-mission", "tag": "abbreviation", "question": "NASA mission and goals", "answers": [], "gold_titles": ["NASA"], "gold_mode": "any"}
+{"id": "hw-einstein-newton", "tag": "comparison", "question": "Compare the scientific contributions of Einstein and Newton", "answers": [], "gold_titles": ["Albert Einstein", "Isaac Newton"], "gold_mode": "all"}
+{"id": "hw-jupiter-saturn", "tag": "comparison", "question": "Which is larger, Jupiter or Saturn?", "answers": ["Jupiter"], "gold_titles": ["Jupiter", "Saturn"], "gold_mode": "all"}
+{"id": "hw-virus-bacteria", "tag": "comparison", "question": "What is the difference between a virus and a bacterium?", "answers": [], "gold_titles": ["Virus", "Bacteria"], "gold_mode": "all"}
+{"id": "hw-moon-walk", "tag": "known-weak", "question": "Who was the first person to walk on the moon?", "answers": ["Neil Armstrong", "Armstrong"], "gold_titles": ["Neil Armstrong", "Apollo 11", "Moon landing"], "gold_mode": "any"}
+{"id": "hw-tsunami", "tag": "known-weak", "question": "How do earthquakes cause tsunamis?", "answers": [], "gold_titles": ["Tsunami"], "gold_mode": "any"}
+{"id": "hw-capital-australia", "tag": "known-weak", "question": "What is the capital of Australia?", "answers": ["Canberra"], "gold_titles": ["Canberra"], "gold_mode": "any"}
+{"id": "hw-ww1-cause", "tag": "multi-hop", "question": "Whose assassination triggered World War I, and where did it happen?", "answers": ["Franz Ferdinand", "Sarajevo"], "gold_titles": ["Assassination of Archduke Franz Ferdinand", "World War I"], "gold_mode": "any"}
+{"id": "hw-east-germany-1989", "tag": "multi-hop", "question": "Who led East Germany when the Berlin Wall fell?", "answers": ["Egon Krenz", "Krenz"], "gold_titles": ["Egon Krenz", "Berlin Wall", "Fall of the Berlin Wall", "East Germany"], "gold_mode": "any"}
+{"id": "hw-bitcoin-creator", "tag": "fact", "question": "Who invented Bitcoin?", "answers": ["Satoshi Nakamoto"], "gold_titles": ["Bitcoin", "Satoshi Nakamoto"], "gold_mode": "any"}
+{"id": "hw-kilimanjaro", "tag": "fact", "question": "What is the tallest mountain in Africa?", "answers": ["Kilimanjaro"], "gold_titles": ["Mount Kilimanjaro"], "gold_mode": "any"}
+{"id": "hw-berlin-wall", "tag": "fact", "question": "When did the Berlin Wall fall?", "answers": ["1989"], "gold_titles": ["Berlin Wall", "Fall of the Berlin Wall"], "gold_mode": "any"}
+{"id": "hw-eiffel", "tag": "fact", "question": "When was the Eiffel Tower completed?", "answers": ["1889"], "gold_titles": ["Eiffel Tower"], "gold_mode": "any"}
